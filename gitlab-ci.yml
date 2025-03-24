@@ -1,0 +1,49 @@
+stages:
+- generate_deps
+- build
+
+variables:
+  # The repo originally includes a lot of data that can render the pipeline slow
+  GIT_STRATEGY: fetch
+  PY_PACKAGE_NAME: SHRECC
+
+generate_deps:
+  # job to create the license and dependency graph
+  image: python:3.12
+  stage: generate_deps
+  before_script:
+    - apt-get update && apt-get install -y -q graphviz
+    - pip install pip-licenses pipdeptree
+    - pip install graphviz
+  script:
+    - pip install .
+    - pip-licenses -a -u -d -f csv --output-file ${PY_PACKAGE_NAME}_deps_licenses.csv
+    - pipdeptree -p ${PY_PACKAGE_NAME} --graph-output png > ${PY_PACKAGE_NAME}_deps.png
+  artifacts:
+    paths:
+      - ${PY_PACKAGE_NAME}_deps_licenses.csv
+      - ${PY_PACKAGE_NAME}_deps.png
+
+
+build_pip_pkg:
+  # job to verify that the package can be built
+  image: python:3.12
+  stage: build
+  before_script:
+    - pip install build
+  script:
+    - python -m build
+
+build_conda_pkg:
+  # job to build a conda package
+  image: condaforge/miniforge3:24.3.0-0
+  stage: build
+  before_script:
+    - apt-get update && apt-get install -y git-lfs
+    - conda install -y -q conda-build anaconda-client
+  script:
+    - conda info
+    - conda config --set auto_update_conda False
+    - conda config --set anaconda_upload no
+    - cd conda.recipe
+    - conda build -c conda-forge -c cmutel .
