@@ -266,7 +266,7 @@ def treating_data(year, n_c, n_p, t_index, Z_net, root):
         L, "reorder_levels", order=["source", "country", "time"], axis=1
     )
     output = output.reindex(L_series.columns)
-    filename = Path(root) / "data" / f"{year}" f"Z_cons_{year}.pkl"
+    filename = Path(root) / "data" / f"{year}" / f"Z_cons_{year}.pkl"
     Z_cons = calculate_Z_cons(filename, L_series, output, Z_indices)
     save_to_pickle(
         results_load, Path(root) / "data" / f"{year}" / f"Z_load_lv_{year}.pkl"
