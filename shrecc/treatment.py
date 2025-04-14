@@ -34,6 +34,12 @@ def data_processing(data_df, year, root=None):
     elif isinstance(root, str):
         root = Path(root)
     print("Processing data...")
+
+    # If pandas is recent enough, use the future_stack argument in stack
+    params = {'level':0}
+    if pd.__version__ >= "2.1.0":
+        params.update({'future_stack':True})
+
     Z = (
         data_df.T.unstack("country")
         .drop(
@@ -45,7 +51,7 @@ def data_processing(data_df, year, root=None):
             errors="ignore",
         )
         .fillna(0)
-        .stack(level=0, future_stack=True if pd.__version__ >= "2.1.0" else False)
+        .stack(**params)
     )
     Z_trade = pd.concat(
         [Z.loc["trade"]], keys=["trade"], names=["source", "country", "time"]
