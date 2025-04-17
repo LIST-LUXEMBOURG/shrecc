@@ -77,8 +77,8 @@ def load_mapping_data(path_to_data):
     Returns:
         pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
     """
-    return pd.read_excel(
-        path_to_data / "el_map_all_norm.xlsx",
+    return pd.read_csv(
+        path_to_data / "el_map_all_norm.csv",
         index_col=[0, 1, 2, 3],
         header=[0, 1],
     )
