@@ -180,9 +180,7 @@ def tech_mapping(year, root=None):
             sum.reset_index(), how="inner", on=["time", "country"]
         )
         merged.rename(columns={0: "sum"}, inplace=True)
-        merged["difference"] = merged.apply(
-            lambda row: max(0, row["load_value"] - row["sum"]), axis=1
-        )
+        merged["difference"] = (merged["load_value"] - merged["sum"]) 
         merged = merged[merged["difference"] > 0]
 
         LCI_cons.sort_index(inplace=True)  # Sort rows
