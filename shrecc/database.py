@@ -135,11 +135,18 @@ def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
     Returns:
         pd.DataFrame: The resulting DataFrame after applying the technology mapping.
     """
-    el_map_to_multiply = el_map_all_norm.reindex(Z_cons_to_multiply.index, axis=1)
-    el_map_to_multiply["NIE"] = el_map_all_norm["GB"][el_map_to_multiply["NIE"].columns]
-    el_map_to_multiply["UK"] = el_map_all_norm["GB"][el_map_to_multiply["UK"].columns]
+    
+    # Changing data types to float32 significantly reduces the product time
+    el_map_to_multiply = el_map_all_norm.reindex(Z_cons_to_multiply.index, axis=1).astype('float32')
+    el_map_to_multiply["NIE"] = el_map_all_norm["GB"][el_map_to_multiply["NIE"].columns].astype('float32')
+    el_map_to_multiply["UK"] = el_map_all_norm["GB"][el_map_to_multiply["UK"].columns].astype('float32')
+
     LCI_cons = el_map_to_multiply.dot(Z_cons_to_multiply)
-    return LCI_cons.fillna(0)
+
+    if LCI_cons.isna().sum().sum():
+       return LCI_cons.fillna(0)
+        
+    return LCI_cons
 
 
 def tech_mapping(year, root=None):
@@ -172,7 +179,9 @@ def tech_mapping(year, root=None):
             "electricity, high voltage",
             "kWh",
         )
-        LCI_cons.loc[load_difference_row] = 0
+
+        # LCI_cons.loc[load_difference_row] = 0
+
         load_stacked = load.stack()
         load_stacked.index.names = ["country", "time"]
         load_stacked = load_stacked[load_stacked != 0]
@@ -182,16 +191,24 @@ def tech_mapping(year, root=None):
         merged.rename(columns={0: "sum"}, inplace=True)
         merged["difference"] = (merged["load_value"] - merged["sum"]) 
         merged = merged[merged["difference"] > 0]
+        merged.set_index(["time","source","country"], inplace=True)
 
         LCI_cons.sort_index(inplace=True)  # Sort rows
         LCI_cons.sort_index(axis=1, inplace=True)
-        for _, row in merged.iterrows():
-            time = row["time"]
-            country = row["country"]
-            difference = row["difference"]
-            lci_col = (time, "trade", country)
-            if lci_col in LCI_cons.columns:
-                LCI_cons.loc[load_difference_row, lci_col] += difference
+
+        # LCI_cons.loc[load_difference_row, merged.index] = merged["difference"]
+
+        LCI_cons.loc[load_difference_row] = merged["difference"]
+        LCI_cons.loc[load_difference_row].fillna(0, inplace=True)
+
+        # for _, row in merged.iterrows():
+        #     time = row["time"]
+        #     country = row["country"]
+        #     difference = row["difference"]
+        #     lci_col = (time, "trade", country)
+        #     if lci_col in LCI_cons.columns:
+        #         LCI_cons.loc[load_difference_row, lci_col] += difference
+        
         LCI_cons_scaled = LCI_cons / LCI_cons.sum()
         save_to_pickle(
             LCI_cons_scaled, Path(root) / "data" / f"LCI_cons_scaled_{year}.pkl"
