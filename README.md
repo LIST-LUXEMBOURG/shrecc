@@ -5,16 +5,15 @@
 SHRECC package is a python package directly compatible with Brightway2 or Brightway2.5 to create time-aware electricity databases. For any given year and countries (check availability on https://api.energy-charts.info/), download and prepare data for low-voltage electricity consumption. 
 ## Features
 
-- **High-Resolution Electricity Mixes** – Generates electricity life cycle inventories (LCIs) with **hourly** resolution, enhancing accuracy for life cycle assessment (LCA).  
-- **Brightway2/2.5 Compatibility** – Seamlessly integrates with Brightway, allowing direct use in existing LCA models.  
-- **Dynamic Temporal Representation** – Users can select electricity mixes by **hour, month, or season**, addressing fluctuations in renewable energy generation and consumption.  
-- **Automated Data Retrieval** – Pulls electricity production, trade, and consumption data from the **Energy Charts API**, ensuring up-to-date datasets.  
-- **Ecoinvent Matching** – Aligns with **ecoinvent classifications**, converting from ENTSO-E datasets. 
-- **User-Controlled Updates** – Enables **one-time or recurring** updates, allowing continuous tracking of electricity mix evolution over time.  
-- **Regulatory Compliance** – Supports emerging policies such as the **EU Delegated Act on Hydrogen** and **France’s monthly time-matching rules** for renewable energy tracking.  
-- **Optimized Impact Assessments** – Helps reduce uncertainty and improve **decision-making for electricity-intensive technologies** by considering real-time electricity mix variations.  
+- **High-resolution electricity mixes** – Generates electricity life cycle inventories (LCIs) with **hourly** resolution, enhancing accuracy for life cycle assessment (LCA).  
+- **Brightway2/2.5 compatibility** – Seamlessly integrates with Brightway, allowing direct use in existing LCA models.  
+- **Dynamic temporal representation** – Users can select electricity mixes by **hour, month, or season**, addressing fluctuations in renewable energy generation and consumption.  
+- **Automated data retrieval** – Pulls electricity production, trade, and consumption data from the **Energy Charts API**, ensuring up-to-date datasets.  
+- **Ecoinvent matching** – Aligns with **ecoinvent classifications**, converting from ENTSO-E datasets. 
+- **User-controlled updates** – Enables **one-time or recurring** updates, allowing continuous tracking of electricity mix evolution over time.    
+- **Optimized impact assessments** – Helps reduce uncertainty and improve **decision-making for electricity-intensive technologies** by considering real-time electricity mix variations.  
 
-## Instalation
+## Installation
 ### Clone the repository
 For the code: git clone <https://git.list.lu/shrecc_project/shrecc>  
 For the data: <https://git.list.lu/shrecc_project/shrecc_data>
