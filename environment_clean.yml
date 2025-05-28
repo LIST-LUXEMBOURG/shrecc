@@ -1,0 +1,40 @@
+name: shrecc_clean
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.9
+  - line_profiler
+  - bw2calc
+  - bw2data
+  - bw2io
+  - bw2analyzer
+  - ecoinvent_interface
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - seaborn
+  - jupyterlab=4.1.8
+  - ipykernel=6.29.4
+  - jupyter_client=8.6.1
+  - importlib_metadata=6.8.0
+  - ipython
+  - ipywidgets
+  - pyside6
+  - lxml
+  - requests
+  - tqdm
+  - openpyxl
+  - xlrd
+  - xlsxwriter
+  - appdirs
+  - future
+  - wrapt
+  - setuptools
+  - pip
+  - pip:
+      - brightway25==1.0.6
+      - stats_arrays
+      - bw2io[multifunctional]
+      
