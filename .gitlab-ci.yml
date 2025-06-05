@@ -37,16 +37,3 @@ build_pip_pkg:
     - python -m build
     - twine check dist/*
 
-build_conda_pkg:
-  # job to build a conda package
-  image: condaforge/miniforge3:24.3.0-0
-  stage: build
-  before_script:
-    - apt-get update && apt-get install -y git-lfs
-    - conda install -y -q conda-build anaconda-client
-  script:
-    - conda info
-    - conda config --set auto_update_conda False
-    - conda config --set anaconda_upload no
-    - cd conda.recipe
-    - conda build -c conda-forge -c cmutel .
