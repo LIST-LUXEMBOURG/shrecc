@@ -3,6 +3,7 @@
 stages:
 - generate_deps
 - build
+- publish
 
 variables:
   # The repo originally includes a lot of data that can render the pipeline slow
@@ -36,4 +37,21 @@ build_pip_pkg:
   script:
     - python -m build
     - twine check dist/*
+  artifacts:
+    paths:
+      - dist/*
+
+publish_pypi_test:
+  # job to publish to test PYPI
+  image: python:3.12
+  stage: publish
+  variables:
+    TWINE_USERNAME: $TWINE_USERNAME
+    TWINE_PASSWORD: $TWINE_PASSWORD
+  before_script:
+    - pip install twine
+  script:
+    - twine upload dist/*
+  dependencies:
+    - build_pip_pkg
 
