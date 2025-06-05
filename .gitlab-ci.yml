@@ -1,3 +1,5 @@
+---
+
 stages:
 - generate_deps
 - build
@@ -30,9 +32,10 @@ build_pip_pkg:
   image: python:3.12
   stage: build
   before_script:
-    - pip install build
+    - pip install build twine
   script:
     - python -m build
+    - twine check dist/*
 
 build_conda_pkg:
   # job to build a conda package
