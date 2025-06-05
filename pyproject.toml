@@ -22,6 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering"
@@ -40,9 +41,9 @@ dependencies = [
 ]
 
 [project.urls]
-source = "https://git.list.lu/sabina.bednarova/SHRECC"
-homepage = "https://git.list.lu/sabina.bednarova/SHRECC"
-tracker = "https://git.list.lu/sabina.bednarova/SHRECC/issues"
+source = "https://git.list.lu/shrecc_project/SHRECC"
+homepage = "https://git.list.lu/shrecc_project/SHRECC"
+tracker = "https://git.list.lu/shrecc_project/SHRECC/issues"
 
 [project.optional-dependencies]
 # Getting recursive dependencies to work is a pain, this
