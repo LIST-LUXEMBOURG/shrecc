@@ -1,4 +1,6 @@
-# SHRECC: Simple Hourly Resolution Electricity Consumption Calculation
+# SHRECC
+
+Simple Hourly Resolution Electricity Consumption Calculation
 
 ## Description
 
