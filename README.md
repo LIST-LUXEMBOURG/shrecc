@@ -56,6 +56,7 @@ Or, with Mamba:
 
 You can find usage examples in the Jupyter notebook: [notebooks/example.ipynb](notebooks/example.ipynb).
 
+
 ## Building the Documentation
 
 You can build the documentation locally by installing the documentation Conda environment:
