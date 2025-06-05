@@ -24,17 +24,20 @@ extensions = [
     'sphinx.ext.extlinks',
     # theme
     'sphinx_rtd_theme',
-    # Markdown support
-    'myst_parser',
     # API documentation support
     'autoapi',
     # responsive web component support
     'sphinx_design',
     # copy button on code blocks
     "sphinx_copybutton",
+    # google style docstrings
+    "sphinx.ext.napoleon",
+    # use notebooks in documentation
+    "myst_nb"
 ]
 
-exclude_patterns = ['_build']
+exclude_patterns = ['_build',
+                    'docs/content/api*']
 
 # The master toctree document.
 master_doc = 'index'
@@ -43,6 +46,7 @@ master_doc = 'index'
 
 intersphinx_mapping = {
     "bw": ("https://docs.brightway.dev/en/latest/", None),
+    'pandas': ('http://pandas.pydata.org/pandas-docs/dev', None)
 }    
 
 ### theme configuration ############################################################################
@@ -70,7 +74,7 @@ html_theme_options = {
 
 source_suffix = {
     '.rst': 'restructuredtext',
-    '.md': 'markdown',
+    # '.md': 'markdown',
 }
 
 myst_enable_extensions = [
@@ -95,7 +99,7 @@ autoapi_options = [
 autoapi_python_class_content = 'both'
 autoapi_member_order = 'groupwise'
 autoapi_root = 'content/api'
-autoapi_keep_files = False
+autoapi_keep_files = True
 
 autoapi_dirs = [
     '../shrecc',
@@ -113,3 +117,8 @@ autoapi_ignore = [
     '*.json',
     '*.data'
 ]
+# jupyter notebooks related configuration
+
+# the execution of the notebooks is costly (database creation for example)
+# so we disable it and use pre-rendered notebooks
+nb_execution_mode = "off"
