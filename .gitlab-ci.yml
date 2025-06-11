@@ -41,7 +41,7 @@ build_pip_pkg:
     paths:
       - dist/*
 
-publish_pypi_test:
+publish_pypi:
   # job to publish to test PYPI
   image: python:3.12
   stage: publish
