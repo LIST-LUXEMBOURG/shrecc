@@ -1,4 +1,6 @@
-# SHRECC: Simple Hourly Resolution Electricity Consumption Calculation
+# SHRECC
+
+Simple Hourly Resolution Electricity Consumption Calculation
 
 ## Description
 
@@ -53,6 +55,27 @@ Or, with Mamba:
 ## Usage
 
 You can find usage examples in the Jupyter notebook: [notebooks/example.ipynb](notebooks/example.ipynb).
+
+
+## Building the Documentation
+
+You can build the documentation locally by installing the documentation Conda environment:
+
+```bash
+conda env create -f docs/environment.yml
+```
+
+activating the environment
+
+```bash
+conda activate sphinx_shrecc
+```
+
+and [running the build command](https://www.sphinx-doc.org/en/master/man/sphinx-build.html#sphinx-build):
+
+```bash
+sphinx-autobuild docs _build/html -a -j auto --ignore 'docs/content/api*' --open-browser
+```
 
 ## License
 
