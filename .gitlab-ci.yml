@@ -26,6 +26,8 @@ generate_deps:
     paths:
       - ${PY_PACKAGE_NAME}_deps_licenses.csv
       - ${PY_PACKAGE_NAME}_deps.png
+  rules:
+    - if: ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop")
 
 
 build_pip_pkg:
