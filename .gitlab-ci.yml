@@ -54,4 +54,6 @@ publish_pypi:
     - twine upload dist/*
   dependencies:
     - build_pip_pkg
+  rules:
+    - if: ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop")
 
