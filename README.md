@@ -16,66 +16,37 @@ SHRECC package is a python package directly compatible with Brightway2 or Bright
 - **User-controlled updates** – Enables **one-time or recurring** updates, allowing continuous tracking of electricity mix evolution over time.
 - **Optimized impact assessments** – Helps reduce uncertainty and improve **decision-making for electricity-intensive technologies** by considering real-time electricity mix variations.
 
+## Documentation
+
+The full documentation is hosted at [Read the Docs page for shrecc](https://shrecc.readthedocs.io/en/latest/)
+
 ## Installation
 
-### Clone the repository
+`shrecc` can be installed from pypi or from source.
 
-For the code: git clone [https://git.list.lu/shrecc_project/shrecc](https://git.list.lu/shrecc_project/shrecc)
-For the data: [https://git.list.lu/shrecc_project/shrecc_data](https://git.list.lu/shrecc_project/shrecc_data)
+### From pypi
 
-### Install dependencies
+The package is published at [pypi.org/projects/shrecc](https://pypi.org/project/shrecc).
+You can install it with pip (or any other pypi compatible util like `uv` or `poetry` as follows:
 
-#### Using pip
+```
+pip install shrecc
+```
 
-If you are using a standard Python environment, install dependencies with:
-` pip install -r requirements.txt`
+### From source 
 
-#### Using Conda environment
+To install shrecc from source, clone the code and then install the package and if necessary the dependencies manually.
 
-If you prefer to use Conda, create an environment from the provided environment.yml file:
-`conda env create -f environment.yml`
-Then activate the environment: `conda activate shrecc`
-Alternatively, if the environment already exists and you want to update it: `conda env update --file environment.yml --prune`
-
-#### Using Conda environment (avoid Anaconda)
-
-If you prefer to use Conda and meanwhile avoid using Anaconda, create an environment from the provided environment_clean.yml file:
-`conda env create -f environment_clean.yml`
-
-Or, if you have Mamba installed (a faster Conda alternative):
-
-`mamba env create -f environment_clean.yml`
-Then activate the environment: `conda activate shrecc_clean`
-Alternatively, if the environment already exists and you want to update it: `conda env update --file environment_clean.yml --prune`
-
-Or, with Mamba:
-
-`mamba env update -n shrecc_clean -f environment.yml  `
 
 ## Usage
 
-You can find usage examples in the Jupyter notebook: [notebooks/example.ipynb](notebooks/example.ipynb).
+You can find usage examples in the Jupyter notebook in this repo: [notebooks/example.ipynb](notebooks/example.ipynb)
+_and_ in the documentation at [read the docs](https://shrecc.readthedocs.io/en/latest/content/notebooks/notebooks.html).
 
 
-## Building the Documentation
+## Contributing
 
-You can build the documentation locally by installing the documentation Conda environment:
-
-```bash
-conda env create -f docs/environment.yml
-```
-
-activating the environment
-
-```bash
-conda activate sphinx_shrecc
-```
-
-and [running the build command](https://www.sphinx-doc.org/en/master/man/sphinx-build.html#sphinx-build):
-
-```bash
-sphinx-autobuild docs _build/html -a -j auto --ignore 'docs/content/api*' --open-browser
-```
+Please take a look at the [DEVELOPPING.md](DEVELOPPING.md) file for details on how to contribute code to the repository.
 
 ## License
 
