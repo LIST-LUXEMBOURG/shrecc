@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -51,6 +51,7 @@ dependencies = [
    "black>=25.1.0",
    "myst-nb>=1.2.0",
 ]
+license-files = ["LICENSE"]
 
 [project.urls]
 source = "https://git.list.lu/shrecc_project/SHRECC"
@@ -82,7 +83,6 @@ docs = [
 ]
 
 [tool.setuptools]
-license-files = ["LICENSE"]
 include-package-data = true
 packages = ["shrecc"]
 
