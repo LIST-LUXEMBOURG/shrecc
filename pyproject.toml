@@ -51,6 +51,7 @@ dependencies = [
    "black>=25.1.0",
    "myst-nb>=1.2.0",
 ]
+license="MIT"
 license-files = ["LICENSE"]
 
 [project.urls]
