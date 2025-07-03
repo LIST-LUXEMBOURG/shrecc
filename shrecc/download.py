@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
+from zoneinfo import ZoneInfo  # Only available in Python 3.9+
 
 import appdirs
 import pandas as pd
@@ -225,20 +226,20 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
 
 def year_to_unix(year):
     """
-    Converts a year to Unix timestamps representing the start and end of the year.
+    Converts a year to Unix timestamps representing the start and end of the year in UTC.
 
     Args:
         year (int): The selected year, passed from `get_data()`.
 
     Returns:
         Tuple[int, int]: A tuple containing:
-            - The start of the year in Unix seconds.
-            - The end of the year in Unix seconds.
+            - The start of the year in Unix seconds (UTC).
+            - The end of the year in Unix seconds (UTC).
     """
-    start_of_year = datetime(year, 1, 1, 0, 0)
-    end_of_year = datetime(year, 12, 31, 23, 59)
-    start_unix = int(time.mktime(start_of_year.timetuple()))
-    end_unix = int(time.mktime(end_of_year.timetuple()))
+    start_of_year = datetime(year, 1, 1, 0, 0, tzinfo=ZoneInfo("UTC"))
+    end_of_year = datetime(year, 12, 31, 23, 59, 59, tzinfo=ZoneInfo("UTC"))  # include full last second
+    start_unix = int(start_of_year.timestamp())
+    end_unix = int(end_of_year.timestamp())
     return start_unix, end_unix
 
 
@@ -260,7 +261,7 @@ def cleaning_data(data, data_dir):
         try:
             techs.extend(datasets["production mix"].columns)
             partners.extend(datasets["trade"].columns)
-        except:
+        except: # noqa E722
             pass
     filename = data_dir / "generation_units_by_country.csv"
     if filename.exists():
@@ -270,7 +271,6 @@ def cleaning_data(data, data_dir):
         for p in set(partners)
         if p in gen_units_per_country.index
     }
-    missing_countries = set(partners) ^ country_codes.keys()
     country_codes = {
         **country_codes,
         **{
