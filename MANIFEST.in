@@ -1,0 +1,2 @@
+include shrecc/data/*csv
+include shrecc/data/*json

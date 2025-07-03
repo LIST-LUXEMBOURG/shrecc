@@ -3,42 +3,39 @@
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
 import pickle
-import pandas as pd
-import numpy as np
+from importlib.resources import files
 from pathlib import Path
-import appdirs
-import sys
+
+import numpy as np
+import pandas as pd
 import scipy.sparse as sp
 from pypardiso import spsolve
-from scipy.sparse import coo_array, csr_matrix, identity, csc_matrix
 from scipy.linalg import block_diag
+from scipy.sparse import coo_array, csc_matrix, csr_matrix, identity
 
 
-def data_processing(data_df, year, root=None):
+def data_processing(data_df, year, path_to_data=None):
     """
     Processes data, adds missing countries, and correctly divides them between consumption and demand.
 
     Args:
         data_df (pd.DataFrame): All of the downloaded data for the selected year (from `get_data`).
         year (int): The selected year, e.g., 2023.
-        root (Path): location of the data.
+        path_to_data (Path): location of the data.
 
     Returns:
         None: Doesn't return anything, but saves files to the directory 'data'.
     """
-    if root is None:
-        package_name = sys.modules["__main__"].__package__
-        if package_name is None:
-            package_name = "shrecc"
-        root = Path(appdirs.user_data_dir(package_name))
-    elif isinstance(root, str):
-        root = Path(root)
+    if path_to_data is None:
+        data_dir = files("shrecc.data")
+    elif isinstance(path_to_data, str):
+        data_dir = Path(path_to_data)
     print("Processing data...")
 
     # If pandas is recent enough, use the future_stack argument in stack
-    params = {'level':0}
+    params = {"level": 0}
     if pd.__version__ >= "2.1.0":
-        params.update({'future_stack':True})
+        params.update({"future_stack": True})
 
     Z = (
         data_df.T.unstack("country")
@@ -127,17 +124,13 @@ def data_processing(data_df, year, root=None):
         .unstack(level="time")
         .sub(Z_net.loc["trade"].sum().unstack(level="time"))
         .droplevel("source")
-        .sub(
-            hydro_pumped.T, fill_value=0
-        )  # Here we had "negative production" of hydropower (pumping) to the load
+        .sub(hydro_pumped.T, fill_value=0)
     )
-    print("saving pickles")
-    save_to_pickle(Z_load, Path(root) / "data" / f"{year}" / f"Z_load_{year}.pkl")
-    save_to_pickle(Z_indices, Path(root) / "data" / f"{year}" / f"indices_{year}.pkl")
-    save_to_pickle(Z_net, Path(root) / "data" / f"{year}" / f"Z_net_{year}.pkl")
-    print("pickles saved")
-    print("treating data")
-    treating_data(year, n_c, n_p, t_index, Z_net, root)
+    save_to_pickle(Z_load, data_dir / f"{year}" / f"Z_load_{year}.pkl")
+    save_to_pickle(Z_indices, data_dir / f"{year}" / f"indices_{year}.pkl")
+    save_to_pickle(Z_net, data_dir / f"{year}" / f"Z_net_{year}.pkl")
+    print("Treating data:")
+    treating_data(year, n_c, n_p, t_index, Z_net, data_dir)
     print("..all done!")
 
 
@@ -234,7 +227,7 @@ def process_matrix(df, operation, axis=1, **kwargs):
         raise ValueError(f"Unknown operation: {operation}")
 
 
-def treating_data(year, n_c, n_p, t_index, Z_net, root):
+def treating_data(year, n_c, n_p, t_index, Z_net, data_dir):
     """
     Function called from `data_processing`. This includes heavy operations, so it's advised to run this part on a server.
 
@@ -242,23 +235,20 @@ def treating_data(year, n_c, n_p, t_index, Z_net, root):
         year (int): The selected year, passed from `data_processing`.
         n_c (int): The number of all countries (including missing ones) in the dataframe, passed from `data_processing`.
         t_index ():
-        root (Path): location of the data.
+        data_dir (Path): location of the data.
 
     Returns:
         None: Doesn't return anything; everything gets saved to the directory 'data'.
     """
-    Z_indices = load_from_pickle(
-        Path(root) / "data" / f"{year}" / f"indices_{year}.pkl"
-    )
-    Z_load = load_from_pickle(Path(root) / "data" / f"{year}" / f"Z_load_{year}.pkl")
+    Z_indices = load_from_pickle(data_dir / f"{year}" / f"indices_{year}.pkl")
+    Z_load = load_from_pickle(data_dir / f"{year}" / f"Z_load_{year}.pkl")
     results, results_load = calculate_results(
-        year, n_c, n_p, t_index, Z_net, Z_load, root
+        year, n_c, n_p, t_index, Z_net, Z_load, data_dir
     )
-    n_c_load = len(Z_load.columns)
-    filename = Path(root) / "data" / f"{year}" / f"results_light_{year}.pkl"
+    filename = data_dir / f"{year}" / f"results_light_{year}.pkl"
     results_light = process_results_light(results, filename, n_c)
 
-    filename = Path(root) / "data" / f"{year}" / f"results_light_load_{year}.pkl"
+    filename = data_dir / f"{year}" / f"results_light_load_{year}.pkl"
 
     L = concatenate_results(results_light, Z_net)
     output = Z_net.sum().reorder_levels(["source", "country", "time"])
@@ -266,14 +256,12 @@ def treating_data(year, n_c, n_p, t_index, Z_net, root):
         L, "reorder_levels", order=["source", "country", "time"], axis=1
     )
     output = output.reindex(L_series.columns)
-    filename = Path(root) / "data" / f"{year}" / f"Z_cons_{year}.pkl"
-    Z_cons = calculate_Z_cons(filename, L_series, output, Z_indices)
-    save_to_pickle(
-        results_load, Path(root) / "data" / f"{year}" / f"Z_load_lv_{year}.pkl"
-    )
+    filename = data_dir / f"{year}" / f"Z_cons_{year}.pkl"
+    Z_cons = calculate_Z_cons(filename, L_series, output, Z_indices)  # noqa: F841
+    save_to_pickle(results_load, data_dir / f"{year}" / f"Z_load_lv_{year}.pkl")
 
 
-def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, root):
+def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, data_dir):
     """
     Calculates results by inverting matrices over time.
 
@@ -284,7 +272,7 @@ def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, root):
         t_index (pd.Index): The time index.
         Z_net (pd.DataFrame): The net consumption dataframe.
         Z_load (pd.DataFrame): The load dataframe.
-        root (Path): location of the data.
+        data_dir (Path): location of the data.
 
     Returns:
         dict: The results dictionary.
@@ -319,14 +307,14 @@ def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, root):
         return Z_load * loss_factor
 
     # case 1: process Z_net
-    filename = Path(root) / "data" / f"{year}" / f"cons_results_{year}.pkl"
+    filename = data_dir / f"{year}" / f"cons_results_{year}.pkl"
     I_net = np.eye((n_p + 1) * n_c)
-    print("Calculating consumption losses")
+    print("Solving exchange network graph")
     results = process_time_series(Z_net, I_net, t_index, filename, process_case1)
-    print("Calculating consumption losses finished")
+    print("Echange network graph solved")
 
     # case 2: process Z_load
-    filename_load = Path(root) / "data" / f"{year}" / f"load_results_{year}.pkl"
+    filename_load = data_dir / f"{year}" / f"load_results_{year}.pkl"
     print("Applying load losses")
     results_load = apply_load_losses(Z_load)
     save_to_pickle(results_load, filename_load)
@@ -342,7 +330,6 @@ def process_results_light(results, filename, n_c):
     Args:
         results (dict): The results dictionary.
         n_c (int): The number of countries.
-        root (Path): location of the data.
 
     Returns:
         dict: The light results dictionary.
@@ -381,7 +368,6 @@ def concatenate_results(results, Z):
     num_time_steps = len(results)
     num_sub_columns = L_sparse.shape[1] // num_time_steps
     time_labels = list(results.keys())
-    sub_labels = list(range(num_sub_columns)) * num_time_steps
     multi_index = pd.MultiIndex.from_tuples(
         [(time, sub) for time in time_labels for sub in range(num_sub_columns)],
         names=["time", "index"],
@@ -401,7 +387,6 @@ def calculate_Z_cons(filename, L_series, output, Z_indices):
         L_series (pd.DataFrame): The L series DataFrame.
         output (pd.Series): The output series.
         Z_indices (dict): The Z indices dictionary.
-        root (Path): location of the data.
 
     Returns:
         pd.DataFrame: The consumption matrix Z_cons.

@@ -11,10 +11,9 @@ __all__ = (
     "filt_cutoff",
     "get_data",
     "data_processing",
-    "download_shrecc_data",
 )
 from .database import create_database, filt_cutoff
-from .download import get_data, download_shrecc_data
+from .download import get_data
 from .treatment import data_processing
 
 __version__ = "0.0.1"

@@ -2,15 +2,16 @@
 # Licensed under the MIT License (see LICENSE file for details).
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
+from datetime import datetime
+from importlib.resources import files
 from pathlib import Path
-import sys
-import appdirs
+
+import bw2data as bd
 import numpy as np
 import pandas as pd
-import bw2data as bd
-from bw2data.query import Query, Filter
-from shrecc.treatment import save_to_pickle, load_from_pickle
-from datetime import datetime
+from bw2data.query import Filter, Query
+
+from shrecc.treatment import load_from_pickle, save_to_pickle
 
 
 def filt_cutoff(
@@ -21,7 +22,7 @@ def filt_cutoff(
     freq=0,
     cutoff=1e-3,
     include_cutoff=True,
-    root=None,
+    path_to_data=None,
 ):
     """
     Filters data based on selected countries and times (either one-off, a range, or periodical range). Gets called from `create_database()`.
@@ -41,20 +42,18 @@ def filt_cutoff(
         cutoff (float): Cutoff value for technology values.
         include_cutoff (bool): If True, cutoff is applied and summed at the end to create a new technology "The rest".
             If False, cutoff is applied but new technology not created.
-        root (Path): location of the data.
+        path_to_data (Path): location of the data. If none, the data is taken from within the package.
 
     Returns:
         pd.DataFrame: The filtered dataframe.
     """
-    if root is None:
-        package_name = sys.modules["__main__"].__package__
-        if package_name is None:
-            package_name = "shrecc"
-        root = Path(appdirs.user_data_dir(package_name))
-    elif isinstance(root, str):
-        root = Path(root)
+    if path_to_data:
+        print(f"Using mapping root: {path_to_data}")
+        path_to_data = Path(path_to_data)
+    else:
+        path_to_data = files("shrecc.data")
     year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
-    dataframe = tech_mapping(year, root=root)
+    dataframe = tech_mapping(year, path_to_data)
     print("Filtering dataframe...")
     dataframe = dataframe.droplevel("source", axis=1)
     dataframe = filter_by_countries(dataframe, countries)
@@ -67,18 +66,18 @@ def filt_cutoff(
     return dataframe
 
 
-def load_mapping_data(path_to_data):
+def load_mapping_data(data_dir):
     """
     Load the mapping data from an Excel file.
 
     Args:
-        path_to_data (str or Path): The path to the directory containing the mapping data.
+        data_dir (str or Path): The path to the directory containing the mapping data.
 
     Returns:
         pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
     """
     return pd.read_csv(
-        path_to_data / "el_map_all_norm.csv",
+        data_dir / "el_map_all_norm.csv",
         index_col=[0, 1, 2, 3],
         header=[0, 1],
     )
@@ -135,43 +134,49 @@ def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
     Returns:
         pd.DataFrame: The resulting DataFrame after applying the technology mapping.
     """
-    
+
     # Changing data types to float32 significantly reduces the product time
-    el_map_to_multiply = el_map_all_norm.reindex(Z_cons_to_multiply.index, axis=1).astype('float32')
-    el_map_to_multiply["NIE"] = el_map_all_norm["GB"][el_map_to_multiply["NIE"].columns].astype('float32')
-    el_map_to_multiply["UK"] = el_map_all_norm["GB"][el_map_to_multiply["UK"].columns].astype('float32')
+    el_map_to_multiply = el_map_all_norm.reindex(
+        Z_cons_to_multiply.index, axis=1
+    ).astype("float32")
+    el_map_to_multiply["NIE"] = el_map_all_norm["GB"][
+        el_map_to_multiply["NIE"].columns
+    ].astype("float32")
+    el_map_to_multiply["UK"] = el_map_all_norm["GB"][
+        el_map_to_multiply["UK"].columns
+    ].astype("float32")
 
     LCI_cons = el_map_to_multiply.dot(Z_cons_to_multiply)
 
     if LCI_cons.isna().sum().sum():
-       return LCI_cons.fillna(0)
-        
+        return LCI_cons.fillna(0)
+
     return LCI_cons
 
 
-def tech_mapping(year, root=None):
+def tech_mapping(year, path_to_data):
     """
     Main function to map the technologies and scale them to 1 kWh.
 
     Args:
         year (int): The year corresponding to the data.
-        root (path): Root directory.
+        path_to_data (path): Root directory of the mapping data.
 
     Returns:
         pd.DataFrame: A DataFrame with the scaled technology mappings.
     """
     print("Mapping technologies...")
-    el_map_all_norm = load_mapping_data(Path(root / "data"))
-    Z_cons = load_time_series_data(Path(root / "data"), year)
-    filename = Path(root / "data" / f"{year}" / f"indices_{year}.pkl")
+    data_dir = files("shrecc.data")
+    el_map_all_norm = load_mapping_data(data_dir)
+    Z_cons = load_time_series_data(path_to_data, year)
     Z_cons_to_multiply = prepare_consumption_data(Z_cons)
-    filename = Path(root) / "data" / f"{year}" / f"LCI_cons_scaled_{year}.pkl"
+    filename = Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl")
     if filename.exists():
         LCI_cons_scaled = load_from_pickle(filename)
     else:
         LCI_cons = apply_mapping(Z_cons_to_multiply, el_map_all_norm)
         sum = LCI_cons.sum()
-        filename = Path(root) / "data" / f"{year}" / f"Z_load_{year}.pkl"
+        filename = Path(path_to_data / f"{year}" / f"Z_load_{year}.pkl")
         load = load_from_pickle(filename)
         load_difference_row = (
             "RER",
@@ -180,8 +185,6 @@ def tech_mapping(year, root=None):
             "kWh",
         )
 
-        # LCI_cons.loc[load_difference_row] = 0
-
         load_stacked = load.stack()
         load_stacked.index.names = ["country", "time"]
         load_stacked = load_stacked[load_stacked != 0]
@@ -189,29 +192,18 @@ def tech_mapping(year, root=None):
             sum.reset_index(), how="inner", on=["time", "country"]
         )
         merged.rename(columns={0: "sum"}, inplace=True)
-        merged["difference"] = (merged["load_value"] - merged["sum"]) 
+        merged["difference"] = merged["load_value"] - merged["sum"]
         merged = merged[merged["difference"] > 0]
-        merged.set_index(["time","source","country"], inplace=True)
+        merged.set_index(["time", "source", "country"], inplace=True)
 
-        LCI_cons.sort_index(inplace=True)  # Sort rows
+        LCI_cons.sort_index(inplace=True)
         LCI_cons.sort_index(axis=1, inplace=True)
-
-        # LCI_cons.loc[load_difference_row, merged.index] = merged["difference"]
-
         LCI_cons.loc[load_difference_row] = merged["difference"]
         LCI_cons.loc[load_difference_row].fillna(0, inplace=True)
-
-        # for _, row in merged.iterrows():
-        #     time = row["time"]
-        #     country = row["country"]
-        #     difference = row["difference"]
-        #     lci_col = (time, "trade", country)
-        #     if lci_col in LCI_cons.columns:
-        #         LCI_cons.loc[load_difference_row, lci_col] += difference
-        
         LCI_cons_scaled = LCI_cons / LCI_cons.sum()
         save_to_pickle(
-            LCI_cons_scaled, Path(root) / "data" / f"LCI_cons_scaled_{year}.pkl"
+            LCI_cons_scaled,
+            Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl"),
         )
     print("Technologies mapped.")
     return LCI_cons_scaled
@@ -228,12 +220,13 @@ def filter_by_countries(dataframe, countries):
     Returns:
         pd.DataFrame: A dataframe filtered by the specified countries.
     """
-    if "country" in dataframe.columns.names:
-        return dataframe.loc[
-            :, dataframe.columns.get_level_values("country").isin(countries)
-        ]
-    else:
+    if "country" not in dataframe.columns.names:
         print("Couldnt find country to filter")
+        return
+
+    return dataframe.loc[
+        :, dataframe.columns.get_level_values("country").isin(countries)
+    ]
 
 
 def filter_by_times(dataframe, times):
@@ -367,7 +360,7 @@ def map_known_inputs(eidb_name, dataframe_filt):
             known_inputs[(loc, name, unit)] = list(results).pop()
         else:
             print("Couldnt find activity:" + name + ", " + loc)
-    network = get_network_activities()
+    network = get_network_activities(eidb_name)
     known_inputs_network = {}
     for act in network:
         loc = act["loc"]
@@ -385,7 +378,7 @@ def map_known_inputs(eidb_name, dataframe_filt):
     return known_inputs, known_inputs_network
 
 
-def get_network_activities():
+def get_network_activities(eidb_name):
     activities = [
         "market for distribution network, electricity, low voltage",
         "market for transmission network, electricity, medium voltage",
@@ -395,15 +388,26 @@ def get_network_activities():
         "market for transmission network, electricity, high voltage direct current subsea cable",
         "transmission network construction, electricity, high voltage",
     ]
-    locations = [
-        "GLO",
-        "GLO",
-        "RER",
-        "GLO",
-        "GLO",
-        "GLO",
-        "CH",
-    ]
+    if "3.11" in eidb_name:
+        locations = [
+            "GLO",
+            "GLO",
+            "RER",
+            "RER",
+            "RER",
+            "RER",
+            "CH",
+        ]
+    else:
+        locations = [
+            "GLO",
+            "GLO",
+            "RER",
+            "GLO",
+            "GLO",
+            "GLO",
+            "CH",
+        ]
     values = [
         8.679076855e-8,
         1.86646177072e-8,
@@ -462,7 +466,7 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
                         "type": "technosphere",
                     }
                     act["exchanges"].append(new_exchange)
-        network = get_network_activities()
+        network = get_network_activities(db_name)
         specific_network = [
             "market for transmission network, electricity, high voltage direct current land cable",
             "market for transmission network, electricity, high voltage direct current subsea cable",
