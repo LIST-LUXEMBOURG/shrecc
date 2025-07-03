@@ -2,19 +2,18 @@
 # Licensed under the MIT License (see LICENSE file for details).
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
-import shutil
-import pandas as pd
-from datetime import datetime
-from pathlib import Path
-import requests
 import json
 import os
-import datetime
 import time
+from datetime import datetime
+from importlib.resources import files
+from pathlib import Path
+
 import appdirs
-import sys
-import tempfile, subprocess
-from shrecc.treatment import save_to_pickle, load_from_pickle
+import pandas as pd
+import requests
+
+from shrecc.treatment import load_from_pickle, save_to_pickle
 
 
 def get_prod(start, end, country, cumul=False, rolling=False):
@@ -115,26 +114,24 @@ def get_trade(start, end, country):
     return trade_df, regions
 
 
-def get_data(year, root=None, max_retries=3, retry_delay=5):
+def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
     """
     Main function for downloading data.
 
     Args:
         year (int): The selected year for which data is to be downloaded, e.g., 2023.
-        root (Path): location of the data.
+        path_to_data (Path): location of the data.
         max_retries (int): The maximum number of retries for each country download in case of problems.
         retry_delay (int): The delay in seconds between retries.
 
     Returns:
         pd.DataFrame: A dataframe containing both production and trade data for all countries in the selected year.
     """
-    if root is None:
-        package_name = sys.modules["__main__"].__package__
-        if package_name is None:
-            package_name = "shrecc"
-        root = Path(appdirs.user_data_dir(package_name))
-    elif isinstance(root, str):
-        root = Path(root)
+    if path_to_data is None:
+        data_dir = files("shrecc.data")
+        path_to_data = data_dir
+    else:
+        data_dir = Path(path_to_data)
     countries = [
         "AL",
         "AM",
@@ -182,14 +179,14 @@ def get_data(year, root=None, max_retries=3, retry_delay=5):
         "UK",
         "XK",
     ]
-    filename = Path(root) / "data" / f"{year}" / f"prod_and_trade_data_{year}.pkl"
+    filename = data_dir / f"{year}" / f"prod_and_trade_data_{year}.pkl"
     filename.parent.mkdir(parents=True, exist_ok=True)
     start, end = year_to_unix(year)
     if filename.exists():
         data = load_from_pickle(filename)
         print("API data loaded successfully.")
     else:
-        data = dict()
+        data = {}
         for country in countries:
             country = country.lower()
             print(country)
@@ -222,7 +219,7 @@ def get_data(year, root=None, max_retries=3, retry_delay=5):
             else:
                 print(f"Failed to fetch data for {country}.")
         save_to_pickle(data, filename)
-    data_df = cleaning_data(data, root)
+    data_df = cleaning_data(data, files("shrecc.data"))
     return data_df
 
 
@@ -238,14 +235,14 @@ def year_to_unix(year):
             - The start of the year in Unix seconds.
             - The end of the year in Unix seconds.
     """
-    start_of_year = datetime.datetime(year, 1, 1, 0, 0)
-    end_of_year = datetime.datetime(year, 12, 31, 23, 59)
+    start_of_year = datetime(year, 1, 1, 0, 0)
+    end_of_year = datetime(year, 12, 31, 23, 59)
     start_unix = int(time.mktime(start_of_year.timetuple()))
     end_unix = int(time.mktime(end_of_year.timetuple()))
     return start_unix, end_unix
 
 
-def cleaning_data(data, root):
+def cleaning_data(data, data_dir):
     """
     Cleans the data and adds missing countries. Note that missing countries need to be manually added to `country_codes`.
     Gets called from `get_data()`.
@@ -265,7 +262,7 @@ def cleaning_data(data, root):
             partners.extend(datasets["trade"].columns)
         except:
             pass
-    filename = Path(root) / "data" / f"generation_units_by_country.csv"
+    filename = data_dir / "generation_units_by_country.csv"
     if filename.exists():
         gen_units_per_country = pd.read_csv(filename, index_col=1)["short"]
     country_codes = {
@@ -287,8 +284,8 @@ def cleaning_data(data, root):
             "Slovakia": "SK",
         },
     }
-    data_clean = dict()
-    filename = Path(root) / "data" / f"techs_agg.json"
+    data_clean = {}
+    filename = data_dir / "techs_agg.json"
     if filename.exists():
         with open(filename, "r") as f:
             techs_agg = json.load(f)
@@ -300,7 +297,7 @@ def cleaning_data(data, root):
     scale_dict = {"production mix": 1, "trade": 1000, "load": 1}
 
     for country in data.keys():
-        data_clean[country.upper()] = dict()
+        data_clean[country.upper()] = {}
         for k, v in data[country].items():
             if type(v) is pd.DataFrame:  # axis = 1 will soon be depreciated
                 grouped = v.T.groupby(agg_dict[k]).sum().T
@@ -328,87 +325,16 @@ def cleaning_data(data, root):
     return P
 
 
-def download_shrecc_data(
-    repo_url="https://git.list.lu/shrecc_project/shrecc_data/",
-    destination_directory=None,
-    branch="main",
-) -> None:
+def get_package_user_data_dir(package_name="shrecc"):
     """
-    Utility function to download the whole pre-calculate dataset.
+    Get the user data dir through appdirs.
+    If it doesn't exist, it will create it.
 
     Args:
-        repo_url (str): the default location of the repository with the data
-        destination_directory: destination of data download
-        branch (str): branch of the repository
-
+        package_name (str): the name of the package
+    Returns
+        Path : the existing or newly created directory.
     """
-    clone_last_commit(repo_url, destination_directory, branch)
-
-
-def clone_last_commit(repo_url, destination_directory=None, branch="main"):
-    """
-    Clone the latest commit from a specified branch of a Git repository.
-
-    This function performs a shallow clone of the latest commit from a specified
-    branch of a Git repository and copies the repository contents to the destination
-    directory, excluding the `.git` directory, `.gitattributes`, and `README.md`.
-
-    Args:
-        repo_url (str): The URL of the Git repository.
-        destination_directory (str): The directory where the repository contents will be copied.
-                                     If not specified, it will be stored in the SHRECC module appdir.
-        branch (str): The branch to clone. Defaults to 'main'.
-
-    Raises:
-        subprocess.CalledProcessError: If the git clone command fails.
-    """
-    if destination_directory is None:
-        package_name = sys.modules["__main__"].__package__
-        if package_name is None:
-            package_name = "shrecc"
-        destination_directory = appdirs.user_data_dir(package_name)
-
+    destination_directory = appdirs.user_data_dir(package_name)
     os.makedirs(destination_directory, exist_ok=True)
-    ignore_from_download = [".git", ".gitattributes", "README.md"]
-
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        try:
-            subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--branch",
-                    branch,
-                    repo_url,
-                    tmpdirname,
-                ],
-                check=True,
-            )
-            print(
-                f"Repository cloned successfully into temporary directory '{tmpdirname}'."
-            )
-            print(f"Moving downloaded contents to '{destination_directory}'.")
-            for item in os.listdir(tmpdirname):
-                s = os.path.join(tmpdirname, item)
-                d = os.path.join(destination_directory, item)
-                if os.path.exists(s) and item in ignore_from_download:
-                    continue
-                if os.path.isdir(s):
-                    if not os.path.exists(d):
-                        shutil.copytree(s, d)
-                    else:
-                        print(f"Directory '{d}' already exists, skipping.")
-                else:
-                    if not os.path.exists(d):
-                        shutil.copy2(s, d)
-                    else:
-                        print(f"File '{d}' already exists, skipping.")
-            print(
-                f"Repository contents copied successfully to '{destination_directory}'."
-            )
-
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to clone repository. Error: {e}")
-            print("Please make sure you have git installed.")
+    return destination_directory
