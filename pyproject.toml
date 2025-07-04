@@ -38,18 +38,6 @@ dependencies = [
    "fs",
    "scipy>=1.14",
    "appdirs",
-   "sphinx>=7.2.6",
-   "sphinx-autobuild>=2024.10.3",
-   "ipython>=8.37.0",
-   "sphinx-rtd-theme>=3.0.2",
-   "myst-parser>=2.0.0",
-   "sphinx-design>=0.6.1",
-   "sphinx-copybutton>=0.5.2",
-   "sphinx-autoapi>=3.5.0",
-   "sphinx-notfound-page>=1.1.0",
-   "ruff>=0.11.12",
-   "black>=25.1.0",
-   "myst-nb>=1.2.0",
 ]
 license="MIT"
 license-files = ["LICENSE"]
@@ -76,12 +64,23 @@ dev = [
     "pytest-cov",
     "pytest-randomly",
     "setuptools",
+    "ruff>=0.11.12",
+    "black>=25.1.0",
 ]
 docs = [
     "furo==2024.1.29",
     "myst_parser==2.0.0",
     "sphinx==7.2.6",
-]
+    "sphinx-autobuild>=2024.10.3",
+    "ipython>=8.37.0",
+    "sphinx-rtd-theme>=3.0.2",
+    "myst-parser>=2.0.0",
+    "sphinx-design>=0.6.1",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-autoapi>=3.5.0",
+    "sphinx-notfound-page>=1.1.0",
+    "myst-nb>=1.2.0",
+ ]
 
 [tool.setuptools]
 include-package-data = true
