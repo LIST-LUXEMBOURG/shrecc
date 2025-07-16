@@ -84,7 +84,7 @@ def data_processing(data_df, year, path_to_data=None):
     c_index = Z_trade.columns
     p_index = (
         Z.loc["production mix"]
-        .drop(["Import balance (market)"])
+        .drop(["Import balance (market)"], errors="ignore")
         .index.get_level_values(0)
         .unique()
     )  # Sometimes,
@@ -94,7 +94,7 @@ def data_processing(data_df, year, path_to_data=None):
     Z_prod_diag = pd.DataFrame(
         block_diag(
             *[
-                Zu.loc["production mix", c].drop(["Import balance (market)"])
+                Zu.loc["production mix", c].drop(["Import balance (market)"], errors="ignore")
                 for c in c_index
             ]
         ),
@@ -234,7 +234,9 @@ def treating_data(year, n_c, n_p, t_index, Z_net, data_dir):
     Args:
         year (int): The selected year, passed from `data_processing`.
         n_c (int): The number of all countries (including missing ones) in the dataframe, passed from `data_processing`.
-        t_index ():
+        n_p (int): The number of production mix elements, passed from `data_processing`.
+        t_index (pd.Index): The time index, passed from `data_processing`.
+        Z_net (pd.DataFrame): The net consumption dataframe, passed from `data_processing`.
         data_dir (Path): location of the data.
 
     Returns:
@@ -247,8 +249,6 @@ def treating_data(year, n_c, n_p, t_index, Z_net, data_dir):
     )
     filename = data_dir / f"{year}" / f"results_light_{year}.pkl"
     results_light = process_results_light(results, filename, n_c)
-
-    filename = data_dir / f"{year}" / f"results_light_load_{year}.pkl"
 
     L = concatenate_results(results_light, Z_net)
     output = Z_net.sum().reorder_levels(["source", "country", "time"])
@@ -299,7 +299,7 @@ def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, data_dir):
         x_t[x_t == 0] = 1  # prevent division by zero
         A_t_sparse = csr_matrix(Z_t / x_t)
         M = csr_matrix(I) - A_t_sparse
-        X = spsolve(M, identity(I.shape[0], format="csc", dtype="float32"))
+        X = spsolve(M, identity(I.shape[0], format="csc", dtype="float64").toarray())
         results[t] = csr_matrix(X)
 
     def apply_load_losses(Z_load, loss_factor=0.965):
@@ -311,7 +311,7 @@ def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, data_dir):
     I_net = np.eye((n_p + 1) * n_c)
     print("Solving exchange network graph")
     results = process_time_series(Z_net, I_net, t_index, filename, process_case1)
-    print("Echange network graph solved")
+    print("Exchange network graph solved")
 
     # case 2: process Z_load
     filename_load = data_dir / f"{year}" / f"load_results_{year}.pkl"
@@ -329,6 +329,7 @@ def process_results_light(results, filename, n_c):
 
     Args:
         results (dict): The results dictionary.
+        filename (Path): Path to the filename where the object will be saved.
         n_c (int): The number of countries.
 
     Returns:
