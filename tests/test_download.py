@@ -13,30 +13,34 @@ from shrecc.download import (
     year_to_unix,
     cleaning_data,
     download_shrecc_data,
-    clone_last_commit
+    clone_last_commit,
 )
+
 
 # ────────────────────────────────────────────────
 # Tests for: year_to_unix() — single, direct test
 # ────────────────────────────────────────────────
-@pytest.mark.parametrize("year, expected_start, expected_end", [
-    (2023, 1672531200, 1704067199),
-    (2022, 1640995200, 1672531199),
-])
+@pytest.mark.parametrize(
+    "year, expected_start, expected_end",
+    [
+        (2023, 1672531200, 1704067199),
+        (2022, 1640995200, 1672531199),
+    ],
+)
 def test_year_to_unix(year, expected_start, expected_end):
     """Test the year_to_unix function to ensure it correctly converts a year to the start and end of that year in Unix time."""
     start, end = year_to_unix(year)
-    assert start == expected_start 
+    assert start == expected_start
     # 1672531200 → 2023-01-01 00:00:00 UTC
     # 1640995200 → 2022-01-01 00:00:00 UTC
-    assert end == expected_end 
+    assert end == expected_end
     # 1704067199 → 2023-12-31 23:59:59 UTC
     # 1672531199 → 2022-12-31 23:59:59 UTC
-      
+
 
 # ─────────────────────────────────────────────────────
 # Tests for: get_prod() — requires multiple sub-tests
-# ─────────────────────────────────────────────────────  
+# ─────────────────────────────────────────────────────
 @pytest.fixture
 def mock_prod_api_response():
     """Fixture to mock the API response for get_prod."""
@@ -48,9 +52,10 @@ def mock_prod_api_response():
             {"name": "Load", "data": [10.0, 11.0, 12.0]},
             {"name": "Residual load", "data": [13.0, 14.0, 15.0]},
         ],
-        "unix_seconds": [1672531200, 1672534800, 1672538400], 
+        "unix_seconds": [1672531200, 1672534800, 1672538400],
         # Corresponds to 2023-01-01 00:00:00, 2023-01-01 01:00:00, 2023-01-01 02:00:00
     }
+
 
 @patch("shrecc.download.requests.Session")
 def test_get_prod_success(mock_session, mock_prod_api_response):
@@ -65,10 +70,10 @@ def test_get_prod_success(mock_session, mock_prod_api_response):
     country = "de"
     prod_df, load_df, techs = get_prod(start, end, country)
     expected_times = [
-    pd.Timestamp("2023-01-01 00:00:00"),
-    pd.Timestamp("2023-01-01 01:00:00"),
-    pd.Timestamp("2023-01-01 02:00:00"),
-]
+        pd.Timestamp("2023-01-01 00:00:00"),
+        pd.Timestamp("2023-01-01 01:00:00"),
+        pd.Timestamp("2023-01-01 02:00:00"),
+    ]
     # Check types
     assert isinstance(prod_df, pd.DataFrame)
     assert isinstance(load_df, pd.Series)
@@ -83,6 +88,7 @@ def test_get_prod_success(mock_session, mock_prod_api_response):
     # Check techs
     assert set(techs) == {"Solar", "Wind", "Load", "Residual load"}
 
+
 @patch("shrecc.download.requests.Session")
 def test_get_prod_404(mock_session):
     """Test the get_prod function for a 404 response."""
@@ -95,6 +101,7 @@ def test_get_prod_404(mock_session):
     assert load_df is None
     assert techs is None
 
+
 @patch("shrecc.download.requests.Session")
 def test_get_prod_400(mock_session):
     """Test the get_prod function for a 400 response."""
@@ -106,6 +113,7 @@ def test_get_prod_400(mock_session):
     assert prod_df is None
     assert load_df is None
     assert techs is None
+
 
 @patch("shrecc.download.requests.Session")
 def test_get_prod_missing_load_column(mock_session, mock_prod_api_response):
@@ -126,7 +134,8 @@ def test_get_prod_missing_load_column(mock_session, mock_prod_api_response):
     assert isinstance(prod_df, pd.DataFrame)
     assert load_df is None
     assert set(prod_df.columns) == {"Solar", "Wind"}
-    assert set(techs) == {"Solar", "Wind"}    
+    assert set(techs) == {"Solar", "Wind"}
+
 
 @patch("shrecc.download.requests.Session")
 def test_get_prod_with_rolling_and_cumul(mock_session, mock_prod_api_response):
@@ -139,47 +148,60 @@ def test_get_prod_with_rolling_and_cumul(mock_session, mock_prod_api_response):
     prod_df_rolling, _, _ = get_prod(
         1672531200, 1672538400, "de", cumul=False, rolling=2
     )
-    prod_df_cumul, _, _ = get_prod(
-        1672531200, 1672538400, "de", cumul=True
-    )
+    prod_df_cumul, _, _ = get_prod(1672531200, 1672538400, "de", cumul=True)
     prod_df_rolling_and_cumul, _, _ = get_prod(
         1672531200, 1672538400, "de", cumul=True, rolling=2
-    )    
+    )
     # Create expected DataFrame
-    expected_df_rolling = pd.DataFrame({
-        "Solar": [np.nan, 3.0, 5.0],
-        "Wind": [np.nan, 9.0, 11.0],
-    }, index=pd.to_datetime([
-        "2023-01-01 00:00:00",
-        "2023-01-01 01:00:00",
-        "2023-01-01 02:00:00",
-    ]))
-    expected_df_cumul = pd.DataFrame({
-        "Solar": [1.0, 3.0, 6.0],
-        "Wind": [4.0, 9.0, 15.0],
-    }, index=pd.to_datetime([
-        "2023-01-01 00:00:00",
-        "2023-01-01 01:00:00",
-        "2023-01-01 02:00:00",
-    ]))
-    expected_df_rolling_and_cumul = pd.DataFrame({
-        "Solar": [np.nan, 3.0, 8.0],
-        "Wind": [np.nan, 9.0, 20.0],
-    }, index=pd.to_datetime([
-        "2023-01-01 00:00:00",
-        "2023-01-01 01:00:00",
-        "2023-01-01 02:00:00",
-    ]))
+    expected_df_rolling = pd.DataFrame(
+        {
+            "Solar": [np.nan, 3.0, 5.0],
+            "Wind": [np.nan, 9.0, 11.0],
+        },
+        index=pd.to_datetime(
+            [
+                "2023-01-01 00:00:00",
+                "2023-01-01 01:00:00",
+                "2023-01-01 02:00:00",
+            ]
+        ),
+    )
+    expected_df_cumul = pd.DataFrame(
+        {
+            "Solar": [1.0, 3.0, 6.0],
+            "Wind": [4.0, 9.0, 15.0],
+        },
+        index=pd.to_datetime(
+            [
+                "2023-01-01 00:00:00",
+                "2023-01-01 01:00:00",
+                "2023-01-01 02:00:00",
+            ]
+        ),
+    )
+    expected_df_rolling_and_cumul = pd.DataFrame(
+        {
+            "Solar": [np.nan, 3.0, 8.0],
+            "Wind": [np.nan, 9.0, 20.0],
+        },
+        index=pd.to_datetime(
+            [
+                "2023-01-01 00:00:00",
+                "2023-01-01 01:00:00",
+                "2023-01-01 02:00:00",
+            ]
+        ),
+    )
 
     # Assert the DataFrame is as expected
     pdt.assert_frame_equal(prod_df_rolling, expected_df_rolling)
     pdt.assert_frame_equal(prod_df_cumul, expected_df_cumul)
     pdt.assert_frame_equal(prod_df_rolling_and_cumul, expected_df_rolling_and_cumul)
-    
-    
+
+
 # ─────────────────────────────────────────────────────
 # Tests for: get_trade() — requires multiple sub-tests
-# ─────────────────────────────────────────────────────  
+# ─────────────────────────────────────────────────────
 @pytest.fixture
 def mock_trade_api_response():
     """Fixture to mock the API response for get_trade."""
@@ -190,6 +212,7 @@ def mock_trade_api_response():
         ],
         "unix_seconds": [1672531200, 1672534800, 1672538400],
     }
+
 
 @patch("shrecc.download.requests.Session")
 def test_get_trade_success(mock_session, mock_trade_api_response):
@@ -203,11 +226,13 @@ def test_get_trade_success(mock_session, mock_trade_api_response):
     end = 1672538400
     country = "de"
     trade_df, regions = get_trade(start, end, country)
-    expected_index = pd.to_datetime([
-        "2023-01-01 00:00:00",
-        "2023-01-01 01:00:00",
-        "2023-01-01 02:00:00",
-    ])
+    expected_index = pd.to_datetime(
+        [
+            "2023-01-01 00:00:00",
+            "2023-01-01 01:00:00",
+            "2023-01-01 02:00:00",
+        ]
+    )
     expected_columns = ["France", "Luxembourg"]
     assert isinstance(trade_df, pd.DataFrame)
     assert list(trade_df.index) == list(expected_index)
@@ -215,6 +240,7 @@ def test_get_trade_success(mock_session, mock_trade_api_response):
     np.testing.assert_array_equal(trade_df["France"].values, [1.1, 2.2, 3.3])
     np.testing.assert_array_equal(trade_df["Luxembourg"].values, [4.4, 5.5, 6.6])
     assert regions == expected_columns
+
 
 @patch("shrecc.download.requests.Session")
 def test_get_trade_404(mock_session):
@@ -225,39 +251,52 @@ def test_get_trade_404(mock_session):
     trade_df, regions = get_trade(0, 1, "xx")
     assert trade_df is None
     assert regions is None
-   
-   
-# ───────────────────────────────────────────────── 
+
+
+# ─────────────────────────────────────────────────
 # Tests for: cleaning_data() — single, direct test
-# ─────────────────────────────────────────────────    
+# ─────────────────────────────────────────────────
 def test_cleaning_data(tmp_path):
     """Test the cleaning_data function with basic input."""
     data_dir = tmp_path / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)    
+    data_dir.mkdir(parents=True, exist_ok=True)
     # Prepare generation_units_by_country.csv
-    gen_units = pd.DataFrame({"en": ["France", "Luxembourg"], "short": ["FR", "LU"]}, )
+    gen_units = pd.DataFrame(
+        {"en": ["France", "Luxembourg"], "short": ["FR", "LU"]},
+    )
     gen_units.to_csv(data_dir / "generation_units_by_country.csv")
     # Prepare techs_agg.json
-    techs_agg = {"Solar": "Solar", "Wind offshore": "Wind", "Wind onshore": "Wind", "Load": "Load"}
+    techs_agg = {
+        "Solar": "Solar",
+        "Wind offshore": "Wind",
+        "Wind onshore": "Wind",
+        "Load": "Load",
+    }
     with open(data_dir / "techs_agg.json", "w") as f:
         json.dump(techs_agg, f)
     # Prepare input data
     idx = pd.date_range("2023-01-01", periods=3, freq="h")
     data = {
         "de": {
-            "production mix": pd.DataFrame({
-                "Solar": [1, 2, 3],
-                "Wind offshore": [4, 5, 6],
-                "Wind onshore": [7, 8, 9],
-                }, index=idx),
-            "trade": pd.DataFrame({
-                "France": [1.1, 1.2, 1.3], 
-                "Luxembourg": [2.1, 2.2, 2.3],
-                "Ireland": [3.1, 3.2, 3.3],
-                }, index=idx),
+            "production mix": pd.DataFrame(
+                {
+                    "Solar": [1, 2, 3],
+                    "Wind offshore": [4, 5, 6],
+                    "Wind onshore": [7, 8, 9],
+                },
+                index=idx,
+            ),
+            "trade": pd.DataFrame(
+                {
+                    "France": [1.1, 1.2, 1.3],
+                    "Luxembourg": [2.1, 2.2, 2.3],
+                    "Ireland": [3.1, 3.2, 3.3],
+                },
+                index=idx,
+            ),
             "load": pd.Series([10, 11, 12], index=idx, name="Load"),
         },
-        "fr":{}
+        "fr": {},
     }
     result = cleaning_data(data, tmp_path)
     # Check MultiIndex columns
@@ -266,15 +305,17 @@ def test_cleaning_data(tmp_path):
     assert "FR" not in result.columns.get_level_values("country")
     assert "production mix" in result.columns.get_level_values("type")
     assert "trade" in result.columns.get_level_values("type")
-    assert "load" in result.columns.get_level_values("type")    
+    assert "load" in result.columns.get_level_values("type")
     assert "Solar" in result.columns.get_level_values("source")
     assert "Wind" in result.columns.get_level_values("source")
     # Check values
     assert np.allclose(result["DE", "production mix", "Solar"].values, [1, 2, 3])
     assert np.allclose(result["DE", "production mix", "Wind"].values, [11, 13, 15])
-    assert np.allclose(result["DE", "trade", "FR"].values, [1100, 1200, 1300])  # trade scaled by 1000
-    assert np.allclose(result["DE", "trade", "LU"].values, [2100, 2200, 2300])  
-    assert np.allclose(result["DE", "trade", "IE"].values, [3100, 3200, 3300])  
+    assert np.allclose(
+        result["DE", "trade", "FR"].values, [1100, 1200, 1300]
+    )  # trade scaled by 1000
+    assert np.allclose(result["DE", "trade", "LU"].values, [2100, 2200, 2300])
+    assert np.allclose(result["DE", "trade", "IE"].values, [3100, 3200, 3300])
     assert np.allclose(result["DE", "load", "Load"].values, [10, 11, 12])
 
 
@@ -289,30 +330,38 @@ def mock_pickle(tmp_path):
     filename = data_dir / "prod_and_trade_data_2023.pkl"
     dummy_data = {
         "de": {
-            "production mix": pd.DataFrame({"Solar": [1]}, index=[pd.Timestamp("2023-01-01 00:00:00")]),
+            "production mix": pd.DataFrame(
+                {"Solar": [1]}, index=[pd.Timestamp("2023-01-01 00:00:00")]
+            ),
             "load": pd.Series([2], index=[pd.Timestamp("2023-01-01 00:00:00")]),
-            "trade": pd.DataFrame({"FR": [3]}, index=[pd.Timestamp("2023-01-01 00:00:00")])
+            "trade": pd.DataFrame(
+                {"FR": [3]}, index=[pd.Timestamp("2023-01-01 00:00:00")]
+            ),
         }
     }
-    
+
     pd.to_pickle(dummy_data, filename)
 
     return filename, dummy_data
 
+
 @patch("shrecc.download.load_from_pickle")
 @patch("shrecc.download.cleaning_data")
-def test_get_data_loads_existing_pickle(mock_cleaning, mock_load, tmp_path, mock_pickle):
+def test_get_data_loads_existing_pickle(
+    mock_cleaning, mock_load, tmp_path, mock_pickle
+):
     """Test the get_data function when a pickle file exists."""
     # If pickle exists, should load and call cleaning_data
     filename, dummy_data = mock_pickle
     mock_load.return_value = dummy_data
     mock_cleaning.return_value = "cleaned"
-    
+
     result = get_data(2023, root=tmp_path)
-    
+
     mock_load.assert_called_once_with(filename)
     mock_cleaning.assert_called_once_with(dummy_data, tmp_path)
     assert result == "cleaned"
+
 
 @patch("shrecc.download.save_to_pickle")
 @patch("shrecc.download.cleaning_data")
@@ -321,13 +370,26 @@ def test_get_data_loads_existing_pickle(mock_cleaning, mock_load, tmp_path, mock
 @patch("shrecc.download.load_from_pickle")
 @patch("pathlib.Path.exists")
 def test_get_data_downloads_and_saves(
-    mock_path_exist, mock_load, mock_get_prod, mock_get_trade, mock_cleaning, mock_save, tmp_path
+    mock_path_exist,
+    mock_load,
+    mock_get_prod,
+    mock_get_trade,
+    mock_cleaning,
+    mock_save,
+    tmp_path,
 ):
     """Test the get_data function when no pickle file exists."""
     # If pickle does not exist, should call get_prod/get_trade for each country, save, and clean
     mock_path_exist.return_value = False  # Simulate no existing pickle file
-    mock_get_prod.return_value = (pd.DataFrame({"Solar": [1]}, index=[pd.Timestamp("2023-01-01 00:00:00")]), pd.Series([2], index=[pd.Timestamp("2023-01-01 00:00:00")]), ["Solar"])
-    mock_get_trade.return_value = (pd.DataFrame({"FR": [3]}, index=[pd.Timestamp("2023-01-01 00:00:00")]), ["FR"])
+    mock_get_prod.return_value = (
+        pd.DataFrame({"Solar": [1]}, index=[pd.Timestamp("2023-01-01 00:00:00")]),
+        pd.Series([2], index=[pd.Timestamp("2023-01-01 00:00:00")]),
+        ["Solar"],
+    )
+    mock_get_trade.return_value = (
+        pd.DataFrame({"FR": [3]}, index=[pd.Timestamp("2023-01-01 00:00:00")]),
+        ["FR"],
+    )
     mock_cleaning.return_value = "cleaned"
 
     result = get_data(2023, root=tmp_path, max_retries=1)
@@ -340,6 +402,7 @@ def test_get_data_downloads_and_saves(
     assert mock_load.call_count == 0
     assert result == "cleaned"
 
+
 @patch("shrecc.download.save_to_pickle")
 @patch("shrecc.download.cleaning_data")
 @patch("shrecc.download.get_trade")
@@ -347,22 +410,36 @@ def test_get_data_downloads_and_saves(
 @patch("shrecc.download.load_from_pickle")
 @patch("pathlib.Path.exists")
 def test_get_data_retries_on_exception(
-    mock_path_exist, mock_load, mock_get_prod, mock_get_trade, mock_cleaning, mock_save, tmp_path
+    mock_path_exist,
+    mock_load,
+    mock_get_prod,
+    mock_get_trade,
+    mock_cleaning,
+    mock_save,
+    tmp_path,
 ):
     """Test the get_data function with retries on exceptions."""
     # Simulate get_prod raising an exception the first time, then succeeding
     call_count = {"count": 0}
+
     def prod_side_effect(*args, **kwargs):
         if call_count["count"] == 0:
             call_count["count"] += 1
             raise Exception("fail once")
-        return (pd.DataFrame({"Solar": [1]}, index=[pd.Timestamp("2023-01-01 00:00:00")]), pd.Series([2], index=[pd.Timestamp("2023-01-01 00:00:00")]), ["Solar"])
-    
+        return (
+            pd.DataFrame({"Solar": [1]}, index=[pd.Timestamp("2023-01-01 00:00:00")]),
+            pd.Series([2], index=[pd.Timestamp("2023-01-01 00:00:00")]),
+            ["Solar"],
+        )
+
     mock_path_exist.return_value = False  # Simulate no existing pickle file
     mock_get_prod.side_effect = prod_side_effect
-    mock_get_trade.return_value = (pd.DataFrame({"FR": [3]}, index=[pd.Timestamp("2023-01-01 00:00:00")]), ["FR"])
+    mock_get_trade.return_value = (
+        pd.DataFrame({"FR": [3]}, index=[pd.Timestamp("2023-01-01 00:00:00")]),
+        ["FR"],
+    )
     mock_cleaning.return_value = "cleaned"
-    
+
     result = get_data(2023, root=tmp_path, max_retries=2, retry_delay=0)
 
     assert mock_get_prod.call_count >= 2
@@ -372,6 +449,7 @@ def test_get_data_retries_on_exception(
     assert mock_cleaning.called
     assert result == "cleaned"
 
+
 @patch("shrecc.download.save_to_pickle")
 @patch("shrecc.download.cleaning_data")
 @patch("shrecc.download.get_trade")
@@ -379,7 +457,14 @@ def test_get_data_retries_on_exception(
 @patch("shrecc.download.load_from_pickle")
 @patch("pathlib.Path.exists")
 def test_get_data_handles_failed_country(
-    mock_path_exist, mock_load, mock_get_prod, mock_get_trade, mock_cleaning, mock_save, tmp_path, capsys
+    mock_path_exist,
+    mock_load,
+    mock_get_prod,
+    mock_get_trade,
+    mock_cleaning,
+    mock_save,
+    tmp_path,
+    capsys,
 ):
     """Test the get_data function when get_prod and get_trade fail for a country."""
     # Simulate get_prod and get_trade always failing for a country
@@ -387,9 +472,9 @@ def test_get_data_handles_failed_country(
     mock_get_prod.side_effect = Exception("fail always")
     mock_get_trade.side_effect = Exception("fail always")
     mock_cleaning.return_value = "cleaned"
-    
+
     get_data(2023, root=tmp_path, max_retries=2, retry_delay=0)
-    
+
     captured = capsys.readouterr()
 
     assert mock_load.not_called()
@@ -406,7 +491,9 @@ def test_download_shrecc_data_calls_clone(mock_clone):
     repo_url = "https://example.com/repo.git"
     dest_dir = "/tmp/data"
     branch = "dev"
-    download_shrecc_data(repo_url=repo_url, destination_directory=dest_dir, branch=branch)
+    download_shrecc_data(
+        repo_url=repo_url, destination_directory=dest_dir, branch=branch
+    )
     mock_clone.assert_called_once_with(repo_url, dest_dir, branch)
 
 
@@ -422,7 +509,14 @@ def test_download_shrecc_data_calls_clone(mock_clone):
 @patch("shrecc.download.shutil.copytree")
 @patch("shrecc.download.shutil.copy2")
 def test_clone_last_commit_success(
-    mock_copy2, mock_copytree, mock_isdir, mock_exists, mock_listdir, mock_run, mock_tempdir, mock_makedirs
+    mock_copy2,
+    mock_copytree,
+    mock_isdir,
+    mock_exists,
+    mock_listdir,
+    mock_run,
+    mock_tempdir,
+    mock_makedirs,
 ):
     """Test the clone_last_commit function to ensure it clones the last commit of a git repository."""
     # Setup
@@ -432,15 +526,19 @@ def test_clone_last_commit_success(
     tmpdirname = "/tmp/tmpclone"
     mock_tempdir.return_value.__enter__.return_value = tmpdirname
     mock_listdir.return_value = ["file1.txt", "dir1", ".git"]
+
     # file1.txt is a file, dir1 is a dir, and .git is ignored
     def exists_side_effect(path):
         # Only .git exists in tmpdirname, others don't exist in dest_dir
         if ".git" in path:
             return True
         return False
+
     mock_exists.side_effect = exists_side_effect
+
     def isdir_side_effect(path):
         return "dir1" in path
+
     mock_isdir.side_effect = isdir_side_effect
 
     clone_last_commit(repo_url, destination_directory=dest_dir, branch=branch)
@@ -471,24 +569,26 @@ def test_clone_last_commit_success(
         os.path.join(dest_dir, "file1.txt"),
     )
 
+
 @patch("shrecc.download.os.makedirs")
 @patch("shrecc.download.tempfile.TemporaryDirectory")
 @patch("shrecc.download.subprocess.run")
 def test_clone_last_commit_git_failure(mock_run, mock_tempdir, mock_makedirs, capsys):
     """Test the clone_last_commit function when git clone fails."""
-    
+
     repo_url = "https://example.com/repo.git"
     dest_dir = "/tmp/data"
     branch = "main"
     tmpdirname = "/tmp/tmpclone"
     mock_tempdir.return_value.__enter__.return_value = tmpdirname
-    mock_run.side_effect=subprocess.CalledProcessError(1, "git")
+    mock_run.side_effect = subprocess.CalledProcessError(1, "git")
 
     clone_last_commit(repo_url, destination_directory=dest_dir, branch=branch)
     # Should print error message
     captured = capsys.readouterr()
     assert "Failed to clone repository" in captured.out
     assert "Please make sure you have git installed." in captured.out
+
 
 @patch("shrecc.download.os.makedirs")
 @patch("shrecc.download.tempfile.TemporaryDirectory")
@@ -499,7 +599,15 @@ def test_clone_last_commit_git_failure(mock_run, mock_tempdir, mock_makedirs, ca
 @patch("shrecc.download.shutil.copytree")
 @patch("shrecc.download.shutil.copy2")
 def test_clone_last_commit_skips_existing(
-    mock_copy2, mock_copytree, mock_isdir, mock_exists, mock_listdir, mock_run, mock_tempdir, mock_makedirs, capsys
+    mock_copy2,
+    mock_copytree,
+    mock_isdir,
+    mock_exists,
+    mock_listdir,
+    mock_run,
+    mock_tempdir,
+    mock_makedirs,
+    capsys,
 ):
     """Test the clone_last_commit function when files and directories already exist in the destination directory."""
     # Setup
@@ -519,11 +627,7 @@ def test_clone_last_commit_skips_existing(
     # Should not call copytree or copy2 since files/dirs exist
     mock_copytree.assert_not_called()
     mock_copy2.assert_not_called()
-    
+
     # Should print skipping messages
     assert f"Directory '{dest_dir}\\dir1' already exists, skipping." in captured.out
     assert f"File '{dest_dir}\\file1.txt' already exists, skipping." in captured.out
-
-
-
-
