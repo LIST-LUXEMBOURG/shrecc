@@ -259,20 +259,20 @@ def filter_by_range(dataframe, general_range, refined_range, freq):
     df_filt = dataframe.loc[:, general_range[0] : general_range[1]]
     if refined_range and len(refined_range) > 1:
         timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq, normalize=True
-        ) + pd.Timedelta(hours=refined_range[0])
+            start=general_range[0], end=general_range[1], freq=freq
+        )
         timestamps_range = timestamp[
             (timestamp.hour >= refined_range[0]) & (timestamp.hour <= refined_range[1])
         ]
         df_filt = df_filt.loc[
-            :, df_filt.columns.get_level_values("time").isin(timestamps_range)
+            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamps_range)
         ]
     elif refined_range and len(refined_range) == 1:
         timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq, normalize=True
-        ) + pd.Timedelta(hours=refined_range[0])
+            start=general_range[0], end=general_range[1], freq=freq
+        )
         df_filt = df_filt.loc[
-            :, df_filt.columns.get_level_values("time").isin(timestamp)
+            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamp)
         ]
     return df_filt.T.groupby(level="country").mean().T
 
