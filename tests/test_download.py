@@ -3,17 +3,13 @@ import pandas as pd
 import json
 import numpy as np
 import pandas.testing as pdt
-import os
-from unittest.mock import patch, MagicMock
-import subprocess
+from unittest.mock import patch, MagicMock, ANY
 from shrecc.download import (
     get_prod,
     get_trade,
     get_data,
     year_to_unix,
     cleaning_data,
-    download_shrecc_data,
-    clone_last_commit,
 )
 
 
@@ -298,7 +294,7 @@ def test_cleaning_data(tmp_path):
         },
         "fr": {},
     }
-    result = cleaning_data(data, tmp_path)
+    result = cleaning_data(data, data_dir)
     # Check MultiIndex columns
     assert isinstance(result.columns, pd.MultiIndex)
     assert "DE" in result.columns.get_level_values("country")
@@ -356,10 +352,11 @@ def test_get_data_loads_existing_pickle(
     mock_load.return_value = dummy_data
     mock_cleaning.return_value = "cleaned"
 
-    result = get_data(2023, root=tmp_path)
+    data_dir = tmp_path / "data"
+    result = get_data(2023, path_to_data=data_dir)
 
     mock_load.assert_called_once_with(filename)
-    mock_cleaning.assert_called_once_with(dummy_data, tmp_path)
+    mock_cleaning.assert_called_once_with(dummy_data, ANY)
     assert result == "cleaned"
 
 
@@ -392,7 +389,8 @@ def test_get_data_downloads_and_saves(
     )
     mock_cleaning.return_value = "cleaned"
 
-    result = get_data(2023, root=tmp_path, max_retries=1)
+    data_dir = tmp_path / "data"
+    result = get_data(2023, path_to_data=data_dir, max_retries=1)
 
     # Should call get_prod/get_trade for all countries (but we only check calls > 0)
     assert mock_get_prod.call_count > 0
@@ -440,7 +438,8 @@ def test_get_data_retries_on_exception(
     )
     mock_cleaning.return_value = "cleaned"
 
-    result = get_data(2023, root=tmp_path, max_retries=2, retry_delay=0)
+    data_dir = tmp_path / "data"
+    result = get_data(2023, path_to_data=data_dir, max_retries=2, retry_delay=0)
 
     assert mock_get_prod.call_count >= 2
     assert mock_get_trade.call_count >= 2
@@ -473,161 +472,11 @@ def test_get_data_handles_failed_country(
     mock_get_trade.side_effect = Exception("fail always")
     mock_cleaning.return_value = "cleaned"
 
-    get_data(2023, root=tmp_path, max_retries=2, retry_delay=0)
+    data_dir = tmp_path / "data"
+    get_data(2023, path_to_data=data_dir, max_retries=2, retry_delay=0)
 
     captured = capsys.readouterr()
 
     assert mock_load.not_called()
     assert mock_save.called
     assert "Failed to fetch data" in captured.out
-
-
-# ────────────────────────────────────────────────────────
-# Tests for: download_shrecc_data() — single, direct test
-# ────────────────────────────────────────────────────────
-@patch("shrecc.download.clone_last_commit")
-def test_download_shrecc_data_calls_clone(mock_clone):
-    """Test that download_shrecc_data calls clone_last_commit with the correct parameters."""
-    repo_url = "https://example.com/repo.git"
-    dest_dir = "/tmp/data"
-    branch = "dev"
-    download_shrecc_data(
-        repo_url=repo_url, destination_directory=dest_dir, branch=branch
-    )
-    mock_clone.assert_called_once_with(repo_url, dest_dir, branch)
-
-
-# ─────────────────────────────────────────────────────────────
-# Tests for: clone_last_commit() — requires multiple sub-tests
-# ─────────────────────────────────────────────────────────────
-@patch("shrecc.download.os.makedirs")
-@patch("shrecc.download.tempfile.TemporaryDirectory")
-@patch("shrecc.download.subprocess.run")
-@patch("shrecc.download.os.listdir")
-@patch("shrecc.download.os.path.exists")
-@patch("shrecc.download.os.path.isdir")
-@patch("shrecc.download.shutil.copytree")
-@patch("shrecc.download.shutil.copy2")
-def test_clone_last_commit_success(
-    mock_copy2,
-    mock_copytree,
-    mock_isdir,
-    mock_exists,
-    mock_listdir,
-    mock_run,
-    mock_tempdir,
-    mock_makedirs,
-):
-    """Test the clone_last_commit function to ensure it clones the last commit of a git repository."""
-    # Setup
-    repo_url = "https://example.com/repo.git"
-    dest_dir = "/tmp/data"
-    branch = "main"
-    tmpdirname = "/tmp/tmpclone"
-    mock_tempdir.return_value.__enter__.return_value = tmpdirname
-    mock_listdir.return_value = ["file1.txt", "dir1", ".git"]
-
-    # file1.txt is a file, dir1 is a dir, and .git is ignored
-    def exists_side_effect(path):
-        # Only .git exists in tmpdirname, others don't exist in dest_dir
-        if ".git" in path:
-            return True
-        return False
-
-    mock_exists.side_effect = exists_side_effect
-
-    def isdir_side_effect(path):
-        return "dir1" in path
-
-    mock_isdir.side_effect = isdir_side_effect
-
-    clone_last_commit(repo_url, destination_directory=dest_dir, branch=branch)
-
-    # Assert subprocess.run called with correct git clone command
-    mock_run.assert_called_once_with(
-        [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            branch,
-            repo_url,
-            tmpdirname,
-        ],
-        check=True,
-    )
-    # makedirs called for destination
-    mock_makedirs.assert_called_once_with(dest_dir, exist_ok=True)
-    # copytree called for dir1, copy2 called for file1.txt, .git and README.md ignored
-    mock_copytree.assert_called_once_with(
-        os.path.join(tmpdirname, "dir1"),
-        os.path.join(dest_dir, "dir1"),
-    )
-    mock_copy2.assert_called_once_with(
-        os.path.join(tmpdirname, "file1.txt"),
-        os.path.join(dest_dir, "file1.txt"),
-    )
-
-
-@patch("shrecc.download.os.makedirs")
-@patch("shrecc.download.tempfile.TemporaryDirectory")
-@patch("shrecc.download.subprocess.run")
-def test_clone_last_commit_git_failure(mock_run, mock_tempdir, mock_makedirs, capsys):
-    """Test the clone_last_commit function when git clone fails."""
-
-    repo_url = "https://example.com/repo.git"
-    dest_dir = "/tmp/data"
-    branch = "main"
-    tmpdirname = "/tmp/tmpclone"
-    mock_tempdir.return_value.__enter__.return_value = tmpdirname
-    mock_run.side_effect = subprocess.CalledProcessError(1, "git")
-
-    clone_last_commit(repo_url, destination_directory=dest_dir, branch=branch)
-    # Should print error message
-    captured = capsys.readouterr()
-    assert "Failed to clone repository" in captured.out
-    assert "Please make sure you have git installed." in captured.out
-
-
-@patch("shrecc.download.os.makedirs")
-@patch("shrecc.download.tempfile.TemporaryDirectory")
-@patch("shrecc.download.subprocess.run")
-@patch("shrecc.download.os.listdir")
-@patch("shrecc.download.os.path.exists")
-@patch("shrecc.download.os.path.isdir")
-@patch("shrecc.download.shutil.copytree")
-@patch("shrecc.download.shutil.copy2")
-def test_clone_last_commit_skips_existing(
-    mock_copy2,
-    mock_copytree,
-    mock_isdir,
-    mock_exists,
-    mock_listdir,
-    mock_run,
-    mock_tempdir,
-    mock_makedirs,
-    capsys,
-):
-    """Test the clone_last_commit function when files and directories already exist in the destination directory."""
-    # Setup
-    repo_url = "https://example.com/repo.git"
-    dest_dir = "/tmp/data"
-    branch = "main"
-    tmpdirname = "/tmp/tmpclone"
-    mock_tempdir.return_value.__enter__.return_value = tmpdirname
-    mock_listdir.return_value = ["file1.txt", "dir1"]
-    # Both file and dir already exist in dest_dir
-    mock_exists.return_value = True
-    mock_isdir.side_effect = lambda path: "dir1" in path
-
-    clone_last_commit(repo_url, destination_directory=dest_dir, branch=branch)
-    captured = capsys.readouterr()
-
-    # Should not call copytree or copy2 since files/dirs exist
-    mock_copytree.assert_not_called()
-    mock_copy2.assert_not_called()
-
-    # Should print skipping messages
-    assert f"Directory '{dest_dir}\\dir1' already exists, skipping." in captured.out
-    assert f"File '{dest_dir}\\file1.txt' already exists, skipping." in captured.out
