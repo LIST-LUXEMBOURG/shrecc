@@ -25,7 +25,7 @@ def filt_cutoff(
     path_to_data=None,
 ):
     """
-    Filters data based on selected countries and times (either one-off, a range, or periodical range). Gets called from `create_database()`.
+    Filters data based on selected countries and times (either one-off, a range, or periodical range).
 
     Args:
         year (int): Selected year of the downloaded data.
@@ -76,6 +76,7 @@ def load_mapping_data(data_dir):
     Returns:
         pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
     """
+    data_dir = Path(data_dir)
     return pd.read_csv(
         data_dir / "el_map_all_norm.csv",
         index_col=[0, 1, 2, 3],
@@ -94,6 +95,7 @@ def load_time_series_data(path_to_data, year):
     Returns:
         pd.DataFrame: A DataFrame containing the time series data, with levels reordered and sorted.
     """
+    path_to_data = Path(path_to_data)
     filename = path_to_data / f"{year}" / f"indices_{year}.pkl"
     indices = load_from_pickle(filename)
     Z_cons_sp = load_from_pickle(path_to_data / f"{year}" / f"Z_cons_{year}.pkl")
@@ -146,6 +148,7 @@ def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
         el_map_to_multiply["UK"].columns
     ].astype("float32")
 
+    el_map_to_multiply = el_map_to_multiply.fillna(0)
     LCI_cons = el_map_to_multiply.dot(Z_cons_to_multiply)
 
     if LCI_cons.isna().sum().sum():
