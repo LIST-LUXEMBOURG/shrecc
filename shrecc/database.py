@@ -42,7 +42,7 @@ def filt_cutoff(
         cutoff (float): Cutoff value for technology values.
         include_cutoff (bool): If True, cutoff is applied and summed at the end to create a new technology "The rest".
             If False, cutoff is applied but new technology not created.
-        path_to_data (Path): location of the data. If none, the data is taken from within the package.
+        path_to_data (str or Path): location of the data. If none, the data is taken from within the package.
 
     Returns:
         pd.DataFrame: The filtered dataframe.
@@ -94,7 +94,7 @@ def load_time_series_data(path_to_data, year):
     Returns:
         pd.DataFrame: A DataFrame containing the time series data, with levels reordered and sorted.
     """
-    filename = path_to_data / f"{year}" / f"indices_{year}.pkl"
+    filename = Path(path_to_data) / f"{year}" / f"indices_{year}.pkl"
     indices = load_from_pickle(filename)
     Z_cons_sp = load_from_pickle(path_to_data / f"{year}" / f"Z_cons_{year}.pkl")
     Z_cons = pd.DataFrame(
@@ -160,7 +160,7 @@ def tech_mapping(year, path_to_data):
 
     Args:
         year (int): The year corresponding to the data.
-        path_to_data (path): Root directory of the mapping data.
+        path_to_data (str or Path): Root directory of the mapping data.
 
     Returns:
         pd.DataFrame: A DataFrame with the scaled technology mappings.
@@ -431,6 +431,7 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
     Args:
         dataframe_filt (pd.DataFrame): The filtered dataframe containing technology data.
         known_inputs (dict): A dictionary mapping known inputs to ecoinvent database entries.
+        known_inputs_network (dict): A dictionary mapping known network inputs to ecoinvent database entries.
         db_name (str): The name of the BW database.
 
     Returns:
@@ -564,6 +565,7 @@ def create_database(dataframe_filt, project_name, db_name, eidb_name, network="T
         project_name (str): BW project name to which the database will be saved.
         db_name (str): Name of the BW database to be created.
         eidb_name (str): Name of the ecoinvent database. Must be the same as in the BW project.
+        network (bool): If True, network activities will be considered.
 
     Returns:
         None

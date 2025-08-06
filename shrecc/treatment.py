@@ -21,15 +21,17 @@ def data_processing(data_df, year, path_to_data=None):
     Args:
         data_df (pd.DataFrame): All of the downloaded data for the selected year (from `get_data`).
         year (int): The selected year, e.g., 2023.
-        path_to_data (Path): location of the data.
+        path_to_data (str or Path): location of the data.
 
     Returns:
         None: Doesn't return anything, but saves files to the directory 'data'.
     """
     if path_to_data is None:
         data_dir = files("shrecc.data")
-    elif isinstance(path_to_data, str):
+    elif isinstance(path_to_data, (str, Path)):
         data_dir = Path(path_to_data)
+    else:
+        raise TypeError("path_to_data must be None, str, or pathlib.Path")
     print("Processing data...")
 
     # If pandas is recent enough, use the future_stack argument in stack
