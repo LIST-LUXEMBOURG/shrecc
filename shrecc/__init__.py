@@ -16,4 +16,4 @@ from .database import create_database, filt_cutoff
 from .download import get_data
 from .treatment import data_processing
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
