@@ -21,15 +21,17 @@ def data_processing(data_df, year, path_to_data=None):
     Args:
         data_df (pd.DataFrame): All of the downloaded data for the selected year (from `get_data`).
         year (int): The selected year, e.g., 2023.
-        path_to_data (Path): location of the data.
+        path_to_data (str or Path): location of the data.
 
     Returns:
         None: Doesn't return anything, but saves files to the directory 'data'.
     """
     if path_to_data is None:
         data_dir = files("shrecc.data")
-    elif isinstance(path_to_data, str):
+    elif isinstance(path_to_data, (str, Path)):
         data_dir = Path(path_to_data)
+    else:
+        raise TypeError("path_to_data must be None, str, or pathlib.Path")
     print("Processing data...")
 
     # If pandas is recent enough, use the future_stack argument in stack
@@ -220,7 +222,7 @@ def process_matrix(df, operation, axis=1, **kwargs):
         pd.DataFrame: The processed dataframe or matrix.
     """
     if operation == "normalize":
-        return df.div(df.sum(axis=axis), axis=axis).fillna(0)
+        return df.div(df.sum(axis=(1-axis)), axis=axis).fillna(0)
     elif operation == "reorder_levels":
         return df.reorder_levels(kwargs["order"], axis=axis).sort_index(axis=axis)
     else:
@@ -364,19 +366,23 @@ def concatenate_results(results, Z):
     Returns:
         pd.DataFrame: The concatenated DataFrame.
     """
-    sparse_matrices = [r for r in results.values()]
-    L_sparse = sp.hstack(sparse_matrices)
-    num_time_steps = len(results)
-    num_sub_columns = L_sparse.shape[1] // num_time_steps
-    time_labels = list(results.keys())
-    multi_index = pd.MultiIndex.from_tuples(
-        [(time, sub) for time in time_labels for sub in range(num_sub_columns)],
-        names=["time", "index"],
-    )
-    L_df = pd.DataFrame.sparse.from_spmatrix(L_sparse, columns=multi_index)
-    L_df.columns = Z.columns
-    L_df.index = Z.index
-    return L_df
+    if not results:
+    # Return an empty DataFrame with the correct columns if known
+        return pd.DataFrame(index=Z.index, columns=Z.columns)
+    else:    
+        sparse_matrices = [r for r in results.values()]
+        L_sparse = sp.hstack(sparse_matrices)
+        num_time_steps = len(results)
+        num_sub_columns = L_sparse.shape[1] // num_time_steps
+        time_labels = list(results.keys())
+        multi_index = pd.MultiIndex.from_tuples(
+            [(time, sub) for time in time_labels for sub in range(num_sub_columns)],
+            names=["time", "index"],
+        )
+        L_df = pd.DataFrame.sparse.from_spmatrix(L_sparse, columns=multi_index)
+        L_df.columns = Z.columns
+        L_df.index = Z.index
+        return L_df
 
 
 def calculate_Z_cons(filename, L_series, output, Z_indices):
