@@ -121,7 +121,7 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
 
     Args:
         year (int): The selected year for which data is to be downloaded, e.g., 2023.
-        path_to_data (Path): location of the data.
+        path_to_data (str or Path): location of the data.
         max_retries (int): The maximum number of retries for each country download in case of problems.
         retry_delay (int): The delay in seconds between retries.
 
@@ -130,7 +130,6 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
     """
     if path_to_data is None:
         data_dir = files("shrecc.data")
-        path_to_data = data_dir
     else:
         data_dir = Path(path_to_data)
     countries = [
