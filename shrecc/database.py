@@ -42,7 +42,7 @@ def filt_cutoff(
         cutoff (float): Cutoff value for technology values.
         include_cutoff (bool): If True, cutoff is applied and summed at the end to create a new technology "The rest".
             If False, cutoff is applied but new technology not created.
-        path_to_data (Path): location of the data. If none, the data is taken from within the package.
+        path_to_data (str or Path): location of the data. If none, the data is taken from within the package.
 
     Returns:
         pd.DataFrame: The filtered dataframe.
@@ -52,11 +52,19 @@ def filt_cutoff(
         path_to_data = Path(path_to_data)
     else:
         path_to_data = files("shrecc.data")
-    year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
+    
+    if general_range:
+        year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
+    elif times:
+        year = datetime.strptime(times[0], "%Y-%m-%d %H:%M:%S").year
+    else:
+        raise ValueError("Either `times` or `general_range` must be provided")
+   
     dataframe = tech_mapping(year, path_to_data)
     print("Filtering dataframe...")
     dataframe = dataframe.droplevel("source", axis=1)
     dataframe = filter_by_countries(dataframe, countries)
+    
     if times:
         dataframe = filter_by_times(dataframe, times)
     if general_range:
@@ -120,7 +128,10 @@ def prepare_consumption_data(Z_cons):
         pd.DataFrame: The prepared consumption data, with the trade data removed and indices swapped.
     """
     Z_cons = Z_cons.sort_index()
-    Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
+    if "trade" in Z_cons.index.get_level_values("source"):
+        Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
+    else:
+        Z_cons_to_multiply = Z_cons.copy()
     Z_cons_to_multiply.index.names = ["source", "geography_mix"]
     return Z_cons_to_multiply.swaplevel()
 
@@ -163,7 +174,7 @@ def tech_mapping(year, path_to_data):
 
     Args:
         year (int): The year corresponding to the data.
-        path_to_data (path): Root directory of the mapping data.
+        path_to_data (str or Path): Root directory of the mapping data.
 
     Returns:
         pd.DataFrame: A DataFrame with the scaled technology mappings.
@@ -262,20 +273,20 @@ def filter_by_range(dataframe, general_range, refined_range, freq):
     df_filt = dataframe.loc[:, general_range[0] : general_range[1]]
     if refined_range and len(refined_range) > 1:
         timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq, normalize=True
-        ) + pd.Timedelta(hours=refined_range[0])
+            start=general_range[0], end=general_range[1], freq=freq
+        )
         timestamps_range = timestamp[
             (timestamp.hour >= refined_range[0]) & (timestamp.hour <= refined_range[1])
         ]
         df_filt = df_filt.loc[
-            :, df_filt.columns.get_level_values("time").isin(timestamps_range)
+            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamps_range)
         ]
     elif refined_range and len(refined_range) == 1:
         timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq, normalize=True
-        ) + pd.Timedelta(hours=refined_range[0])
+            start=general_range[0], end=general_range[1], freq=freq
+        )
         df_filt = df_filt.loc[
-            :, df_filt.columns.get_level_values("time").isin(timestamp)
+            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamp)
         ]
     return df_filt.T.groupby(level="country").mean().T
 
@@ -434,6 +445,7 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
     Args:
         dataframe_filt (pd.DataFrame): The filtered dataframe containing technology data.
         known_inputs (dict): A dictionary mapping known inputs to ecoinvent database entries.
+        known_inputs_network (dict): A dictionary mapping known network inputs to ecoinvent database entries.
         db_name (str): The name of the BW database.
 
     Returns:
@@ -567,6 +579,7 @@ def create_database(dataframe_filt, project_name, db_name, eidb_name, network="T
         project_name (str): BW project name to which the database will be saved.
         db_name (str): Name of the BW database to be created.
         eidb_name (str): Name of the ecoinvent database. Must be the same as in the BW project.
+        network (bool): If True, network activities will be considered.
 
     Returns:
         None
