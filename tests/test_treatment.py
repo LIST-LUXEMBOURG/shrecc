@@ -63,11 +63,11 @@ def test_data_processing(mock_treating_data, tmp_path, mock_data_df):
     data_df = mock_data_df
     year = 2023
 
-    expected_output_dir = tmp_path / "data" / str(year)
+    expected_output_dir = tmp_path / str(year)
     expected_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Run data_processing
-    data_processing(data_df, year, root=tmp_path)
+    data_processing(data_df, year, path_to_data=tmp_path)
     # Check that the expected files are created
     expected_Z_load = pd.DataFrame(
         [
@@ -131,7 +131,7 @@ def test_data_processing(mock_treating_data, tmp_path, mock_data_df):
     }
 
     # Check that pickle files are created
-    data_dir = tmp_path / "data" / f"{year}"
+    data_dir = tmp_path / f"{year}"
     assert (data_dir / f"Z_load_{year}.pkl").exists()
     assert (data_dir / f"indices_{year}.pkl").exists()
     assert (data_dir / f"Z_net_{year}.pkl").exists()

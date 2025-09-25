@@ -1150,22 +1150,21 @@ def test_apply_cutoff_empty_dataframe():
 # ────────────────────────────────────────────────────────────────
 @pytest.fixture
 def dummy_dataframe_for_filt_cutoff():
-    # MultiIndex for columns: (time, country)
-    columns = pd.MultiIndex.from_tuples(
+    # MultiIndex for columns: (time, source, country)
+    times = pd.to_datetime(
         [
-            ("2023-06-01 08:00:00", "trade", "DE"),
-            ("2023-06-01 08:00:00", "trade", "FR"),
-            ("2023-06-01 09:00:00", "trade", "DE"),
-            ("2023-06-01 09:00:00", "trade", "FR"),
-            ("2023-06-01 10:00:00", "trade", "DE"),
-            ("2023-06-01 10:00:00", "trade", "FR"),
-            ("2023-06-01 11:00:00", "trade", "DE"),
-            ("2023-06-01 11:00:00", "trade", "FR"),
-            ("2023-06-01 12:00:00", "trade", "DE"),
-            ("2023-06-01 12:00:00", "trade", "FR"),
-        ],
+            "2023-06-01 08:00:00",
+            "2023-06-01 09:00:00",
+            "2023-06-01 10:00:00",
+            "2023-06-01 11:00:00",
+            "2023-06-01 12:00:00",
+        ]
+    )
+    columns = pd.MultiIndex.from_product(
+        [times, ["trade"], ["DE", "FR"]],
         names=["time", "source", "country"],
     )
+
     index = pd.MultiIndex.from_tuples(
         [
             ("FR", "tech1", "electricity, high voltage", "kWh"),
@@ -1173,12 +1172,13 @@ def dummy_dataframe_for_filt_cutoff():
         ],
         names=["geography", "activityName", "prod", "unit"],
     )
+
     data = [
         [0.5, 0.2, 0.1, 0.05, 0.01, 0.1, 0.03, 0.2, 0.5, 0.03],
         [0.3, 0.4, 0.2, 0.01, 0.06, 0.3, 0.07, 0.1, 0.3, 0.04],
     ]
-    df = pd.DataFrame(data, index=index, columns=columns)
-    return df
+
+    return pd.DataFrame(data, index=index, columns=columns)
 
 
 @patch("shrecc.database.tech_mapping")
@@ -1208,13 +1208,10 @@ def test_filt_cutoff_filtering_by_times(
     assert result.shape == (3, 1)
     assert all(result.columns.get_level_values("country") == "FR")
     assert (result.values >= 0).all()
-    assert result.loc[rest_row, ("FR")] == 0
-    assert (
-        result.loc[("FR", "tech1", "electricity, high voltage", "kWh"), ("FR")] == 0.2
-    )
-    assert (
-        result.loc[("DE", "tech2", "electricity, high voltage", "kWh"), ("FR")] == 0.4
-    )
+    fr_slice = result.xs("FR", level="country", axis=1)
+    assert fr_slice.loc[rest_row].iloc[0] == 0
+    assert fr_slice.loc[("FR", "tech1", "electricity, high voltage", "kWh")].iloc[0] == 0.2
+    assert fr_slice.loc[("DE", "tech2", "electricity, high voltage", "kWh")].iloc[0] == 0.4
 
 
 @patch("shrecc.database.tech_mapping")
