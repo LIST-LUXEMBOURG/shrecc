@@ -220,7 +220,7 @@ def process_matrix(df, operation, axis=1, **kwargs):
         pd.DataFrame: The processed dataframe or matrix.
     """
     if operation == "normalize":
-        return df.div(df.sum(axis=axis), axis=axis).fillna(0)
+        return df.div(df.sum(axis=(1-axis)), axis=axis).fillna(0)
     elif operation == "reorder_levels":
         return df.reorder_levels(kwargs["order"], axis=axis).sort_index(axis=axis)
     else:
