@@ -25,7 +25,7 @@ def filt_cutoff(
     path_to_data=None,
 ):
     """
-    Filters data based on selected countries and times (either one-off, a range, or periodical range). Gets called from `create_database()`.
+    Filters data based on selected countries and times (either one-off, a range, or periodical range).
 
     Args:
         year (int): Selected year of the downloaded data.
@@ -42,7 +42,7 @@ def filt_cutoff(
         cutoff (float): Cutoff value for technology values.
         include_cutoff (bool): If True, cutoff is applied and summed at the end to create a new technology "The rest".
             If False, cutoff is applied but new technology not created.
-        path_to_data (Path): location of the data. If none, the data is taken from within the package.
+        path_to_data (str or Path): location of the data. If none, the data is taken from within the package.
 
     Returns:
         pd.DataFrame: The filtered dataframe.
@@ -52,11 +52,19 @@ def filt_cutoff(
         path_to_data = Path(path_to_data)
     else:
         path_to_data = files("shrecc.data")
-    year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
+    
+    if general_range:
+        year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
+    elif times:
+        year = datetime.strptime(times[0], "%Y-%m-%d %H:%M:%S").year
+    else:
+        raise ValueError("Either `times` or `general_range` must be provided")
+   
     dataframe = tech_mapping(year, path_to_data)
     print("Filtering dataframe...")
     dataframe = dataframe.droplevel("source", axis=1)
     dataframe = filter_by_countries(dataframe, countries)
+    
     if times:
         dataframe = filter_by_times(dataframe, times)
     if general_range:
@@ -76,6 +84,7 @@ def load_mapping_data(data_dir):
     Returns:
         pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
     """
+    data_dir = Path(data_dir)
     return pd.read_csv(
         data_dir / "el_map_all_norm.csv",
         index_col=[0, 1, 2, 3],
@@ -94,6 +103,7 @@ def load_time_series_data(path_to_data, year):
     Returns:
         pd.DataFrame: A DataFrame containing the time series data, with levels reordered and sorted.
     """
+    path_to_data = Path(path_to_data)
     filename = path_to_data / f"{year}" / f"indices_{year}.pkl"
     indices = load_from_pickle(filename)
     Z_cons_sp = load_from_pickle(path_to_data / f"{year}" / f"Z_cons_{year}.pkl")
@@ -118,7 +128,10 @@ def prepare_consumption_data(Z_cons):
         pd.DataFrame: The prepared consumption data, with the trade data removed and indices swapped.
     """
     Z_cons = Z_cons.sort_index()
-    Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
+    if "trade" in Z_cons.index.get_level_values("source"):
+        Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
+    else:
+        Z_cons_to_multiply = Z_cons.copy()
     Z_cons_to_multiply.index.names = ["source", "geography_mix"]
     return Z_cons_to_multiply.swaplevel()
 
@@ -146,6 +159,7 @@ def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
         el_map_to_multiply["UK"].columns
     ].astype("float32")
 
+    el_map_to_multiply = el_map_to_multiply.fillna(0)
     LCI_cons = el_map_to_multiply.dot(Z_cons_to_multiply)
 
     if LCI_cons.isna().sum().sum():
@@ -160,7 +174,7 @@ def tech_mapping(year, path_to_data):
 
     Args:
         year (int): The year corresponding to the data.
-        path_to_data (path): Root directory of the mapping data.
+        path_to_data (str or Path): Root directory of the mapping data.
 
     Returns:
         pd.DataFrame: A DataFrame with the scaled technology mappings.
@@ -431,6 +445,7 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
     Args:
         dataframe_filt (pd.DataFrame): The filtered dataframe containing technology data.
         known_inputs (dict): A dictionary mapping known inputs to ecoinvent database entries.
+        known_inputs_network (dict): A dictionary mapping known network inputs to ecoinvent database entries.
         db_name (str): The name of the BW database.
 
     Returns:
@@ -564,6 +579,7 @@ def create_database(dataframe_filt, project_name, db_name, eidb_name, network="T
         project_name (str): BW project name to which the database will be saved.
         db_name (str): Name of the BW database to be created.
         eidb_name (str): Name of the ecoinvent database. Must be the same as in the BW project.
+        network (bool): If True, network activities will be considered.
 
     Returns:
         None
