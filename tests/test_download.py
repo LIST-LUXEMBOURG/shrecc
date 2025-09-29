@@ -444,7 +444,7 @@ def test_get_data_retries_on_exception(
     assert mock_get_prod.call_count >= 2
     assert mock_get_trade.call_count >= 2
     assert mock_save.called
-    assert mock_load.not_called()
+    mock_load.assert_not_called()
     assert mock_cleaning.called
     assert result == "cleaned"
 
@@ -477,6 +477,6 @@ def test_get_data_handles_failed_country(
 
     captured = capsys.readouterr()
 
-    assert mock_load.not_called()
+    mock_load.assert_not_called()
     assert mock_save.called
     assert "Failed to fetch data" in captured.out
