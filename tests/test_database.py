@@ -51,7 +51,7 @@ def test_load_mapping_data_basic(tmp_path):
     assert float(df.iloc[0, 0]) == 0.1
     assert float(df.iloc[1, 2]) == 0.7
     # Check if the function works with path as string
-    df_string = load_mapping_data(str(tmp_path))
+    df_string = load_mapping_data(str(csv_file))
     # Check if both methods return the same DataFrame
     assert df.equals(df_string)
 
@@ -1210,8 +1210,12 @@ def test_filt_cutoff_filtering_by_times(
     assert (result.values >= 0).all()
     fr_slice = result.xs("FR", level="country", axis=1)
     assert fr_slice.loc[rest_row].iloc[0] == 0
-    assert fr_slice.loc[("FR", "tech1", "electricity, high voltage", "kWh")].iloc[0] == 0.2
-    assert fr_slice.loc[("DE", "tech2", "electricity, high voltage", "kWh")].iloc[0] == 0.4
+    assert (
+        fr_slice.loc[("FR", "tech1", "electricity, high voltage", "kWh")].iloc[0] == 0.2
+    )
+    assert (
+        fr_slice.loc[("DE", "tech2", "electricity, high voltage", "kWh")].iloc[0] == 0.4
+    )
 
 
 @patch("shrecc.database.tech_mapping")

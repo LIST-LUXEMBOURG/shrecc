@@ -52,19 +52,19 @@ def filt_cutoff(
         path_to_data = Path(path_to_data)
     else:
         path_to_data = files("shrecc.data")
-    
+
     if general_range:
         year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
     elif times:
         year = datetime.strptime(times[0], "%Y-%m-%d %H:%M:%S").year
     else:
         raise ValueError("Either `times` or `general_range` must be provided")
-   
+
     dataframe = tech_mapping(year, path_to_data)
     print("Filtering dataframe...")
     dataframe = dataframe.droplevel("source", axis=1)
     dataframe = filter_by_countries(dataframe, countries)
-    
+
     if times:
         dataframe = filter_by_times(dataframe, times)
     if general_range:
@@ -74,22 +74,33 @@ def filt_cutoff(
     return dataframe
 
 
-def load_mapping_data(data_dir):
+def load_mapping_data(mapping_location):
     """
     Load the mapping data from an Excel file.
+    mapping_collection can be either a string pointing to a full file, or a directory.
+    If it is a directory, it will assume that the file name is `el_map_all_norm.csv`
 
     Args:
-        data_dir (str or Path): The path to the directory containing the mapping data.
+        mapping_location (str or Path): a full filename as string or path to the scaled technology mapping.
 
     Returns:
         pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
     """
-    data_dir = Path(data_dir)
-    return pd.read_csv(
-        data_dir / "el_map_all_norm.csv",
+    if isinstance(mapping_location, str):
+        mapping_file = Path(mapping_location)
+    elif isinstance(mapping_location, Path) and mapping_location.is_dir():
+        mapping_file = mapping_location / "el_map_all_norm.csv"
+    elif isinstance(mapping_location, Path) and mapping_location.is_file():
+        mapping_file = mapping_location
+    else:
+        # We will use the file included in the SHRECC.data module
+        mapping_file = mapping_location / "el_map_all_norm.csv"
+    df = pd.read_csv(
+        mapping_file,
         index_col=[0, 1, 2, 3],
         header=[0, 1],
     )
+    return df
 
 
 def load_time_series_data(path_to_data, year):
@@ -168,20 +179,25 @@ def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
     return LCI_cons
 
 
-def tech_mapping(year, path_to_data):
+def tech_mapping(year, path_to_data, path_to_mapping=None):
     """
     Main function to map the technologies and scale them to 1 kWh.
 
     Args:
         year (int): The year corresponding to the data.
-        path_to_data (str or Path): Root directory of the mapping data.
+        path_to_data (str or Path): Root directory of the data.
+        path_to_mapping (str or Path): File with the mapping of the scaled technology mappings.
+                                        If None, it will use the mapping from the package.
 
     Returns:
         pd.DataFrame: A DataFrame with the scaled technology mappings.
     """
     print("Mapping technologies...")
-    data_dir = files("shrecc.data")
-    el_map_all_norm = load_mapping_data(data_dir)
+    if path_to_mapping:
+        el_map_all_norm = load_mapping_data(path_to_mapping)
+    else:
+        data_dir = files("shrecc.data")
+        el_map_all_norm = load_mapping_data(data_dir)
     Z_cons = load_time_series_data(path_to_data, year)
     Z_cons_to_multiply = prepare_consumption_data(Z_cons)
     filename = Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl")
@@ -279,7 +295,10 @@ def filter_by_range(dataframe, general_range, refined_range, freq):
             (timestamp.hour >= refined_range[0]) & (timestamp.hour <= refined_range[1])
         ]
         df_filt = df_filt.loc[
-            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamps_range)
+            :,
+            pd.to_datetime(df_filt.columns.get_level_values("time")).isin(
+                timestamps_range
+            ),
         ]
     elif refined_range and len(refined_range) == 1:
         timestamp = pd.date_range(
