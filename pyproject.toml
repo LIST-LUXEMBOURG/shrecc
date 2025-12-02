@@ -35,6 +35,7 @@ dependencies = [
    "pypardiso",
    "pandas>=2",
    "numpy<3",
+   'numpy>2;python_version>="3.13"',
    "requests>=2.32",
    "fs",
    "scipy>=1.14",
