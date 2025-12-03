@@ -50,7 +50,7 @@ Please take a look at the [DEVELOPPING.md](DEVELOPPING.md) file for details on h
 
 ## License
 
-Copyright © 2024 Luxembourg Institute of Science and Technology
+Copyright © 2025 Luxembourg Institute of Science and Technology
 Licensed under the MIT License.
 
 ## Authors
