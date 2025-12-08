@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import numpy as np
 import pandas.testing as pdt
+import requests
 from unittest.mock import patch, MagicMock, ANY
 from shrecc.download import (
     get_prod,
@@ -90,12 +91,14 @@ def test_get_prod_404(mock_session):
     """Test the get_prod function for a 404 response."""
     mock_response = MagicMock()
     mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
     mock_session.return_value.get.return_value = mock_response
 
-    prod_df, load_df, techs = get_prod(0, 1, "xx")
-    assert prod_df is None
-    assert load_df is None
-    assert techs is None
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_prod(0, 1, "xx")
+    assert exc_info.value.response.status_code == 404
 
 
 @patch("shrecc.download.requests.Session")
@@ -103,12 +106,14 @@ def test_get_prod_400(mock_session):
     """Test the get_prod function for a 400 response."""
     mock_response = MagicMock()
     mock_response.status_code = 400
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "400 Client Error: Bad Request", response=mock_response
+    )
     mock_session.return_value.get.return_value = mock_response
 
-    prod_df, load_df, techs = get_prod(0, 1, "invalid")
-    assert prod_df is None
-    assert load_df is None
-    assert techs is None
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_prod(0, 1, "invalid")
+    assert exc_info.value.response.status_code == 400
 
 
 @patch("shrecc.download.requests.Session")
@@ -240,13 +245,116 @@ def test_get_trade_success(mock_session, mock_trade_api_response):
 
 @patch("shrecc.download.requests.Session")
 def test_get_trade_404(mock_session):
+    """Test the get_trade function for a 404 response."""
     mock_response = MagicMock()
     mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
     mock_session.return_value.get.return_value = mock_response
 
-    trade_df, regions = get_trade(0, 1, "xx")
-    assert trade_df is None
-    assert regions is None
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_trade(0, 1, "xx")
+    assert exc_info.value.response.status_code == 404
+
+
+# ─────────────────────────────────────────────────────
+# Tests for 404 exceptions with realistic scenarios
+# ─────────────────────────────────────────────────────
+@patch("shrecc.download.requests.Session")
+def test_get_prod_404_bogus_year(mock_session):
+    """Test get_prod with a bogus year (e.g., 1900) that should yield a 404."""
+    start, end = year_to_unix(1900)  # Bogus year
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
+    mock_session.return_value.get.return_value = mock_response
+
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_prod(start, end, "de")
+    assert exc_info.value.response.status_code == 404
+
+
+@patch("shrecc.download.requests.Session")
+def test_get_prod_404_bogus_country_valid_year(mock_session):
+    """Test get_prod with a bogus country but valid year (2021-2024) that should yield a 404."""
+    start, end = year_to_unix(2023)  # Valid year in range 2021-2024
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
+    mock_session.return_value.get.return_value = mock_response
+
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_prod(start, end, "invalid_country_code")
+    assert exc_info.value.response.status_code == 404
+
+
+@patch("shrecc.download.requests.Session")
+def test_get_prod_404_bogus_year_and_country(mock_session):
+    """Test get_prod with both bogus year and bogus country that should yield a 404."""
+    start, end = year_to_unix(3000)  # Bogus year
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
+    mock_session.return_value.get.return_value = mock_response
+
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_prod(start, end, "invalid_country_code")
+    assert exc_info.value.response.status_code == 404
+
+
+@patch("shrecc.download.requests.Session")
+def test_get_trade_404_bogus_year(mock_session):
+    """Test get_trade with a bogus year (e.g., 1900) that should yield a 404."""
+    start, end = year_to_unix(1900)  # Bogus year
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
+    mock_session.return_value.get.return_value = mock_response
+
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_trade(start, end, "de")
+    assert exc_info.value.response.status_code == 404
+
+
+@patch("shrecc.download.requests.Session")
+def test_get_trade_404_bogus_country_valid_year(mock_session):
+    """Test get_trade with a bogus country but valid year (2021-2024) that should yield a 404."""
+    start, end = year_to_unix(2022)  # Valid year in range 2021-2024
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
+    mock_session.return_value.get.return_value = mock_response
+
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_trade(start, end, "invalid_country_code")
+    assert exc_info.value.response.status_code == 404
+
+
+@patch("shrecc.download.requests.Session")
+def test_get_trade_404_bogus_year_and_country(mock_session):
+    """Test get_trade with both bogus year and bogus country that should yield a 404."""
+    start, end = year_to_unix(3000)  # Bogus year
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "404 Client Error: Not Found", response=mock_response
+    )
+    mock_session.return_value.get.return_value = mock_response
+
+    with pytest.raises(requests.HTTPError) as exc_info:
+        get_trade(start, end, "invalid_country_code")
+    assert exc_info.value.response.status_code == 404
 
 
 # ─────────────────────────────────────────────────

@@ -38,12 +38,7 @@ def get_prod(start, end, country, cumul=False, rolling=False):
     url = f"https://api.energy-charts.info/public_power?country={country}&start={start}&end={end}"
     r = s.get(url)
     s.close()
-    if r.status_code == 404:
-        print("File not found!")
-        return None, None, None
-    if r.status_code == 400:
-        print("Bad request! Country not found.")
-        return None, None, None
+    r.raise_for_status()
     response = json.loads(r.text)
     techs = []
     prod = []
@@ -97,9 +92,7 @@ def get_trade(start, end, country):
     )
     r = s.get(url)
     s.close()
-    if r.status_code == 404:
-        print("File not found!")
-        return None, None
+    r.raise_for_status()
     response = json.loads(r.text)
     ticks = [
         pd.to_datetime(d, unit="s", origin="unix") for d in response["unix_seconds"]
@@ -132,7 +125,7 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
         data_dir = files("shrecc.data")
     else:
         data_dir = Path(path_to_data)
-    countries = [
+    ALL_COUNTRIES = [
         "AL",
         "AM",
         "AT",
@@ -187,7 +180,7 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
         print("API data loaded successfully.")
     else:
         data = {}
-        for country in countries:
+        for country in ALL_COUNTRIES:
             country = country.lower()
             print(country)
             for attempt in range(max_retries):
@@ -208,6 +201,12 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
                         "trade": trade_df,
                     }
                     break
+                except requests.HTTPError as e:
+                    if e.response.status_code == 404 or e.response.status_code == 400:
+                        print(f"\t{e.response.status_code} error for {country}: {e}")
+                        print(f"\tResponse text: {e.response.text}")
+                        time.sleep(retry_delay)
+                        break  # Break out of retry loop, continue to next country
                 except requests.ConnectionError as e:
                     print(
                         f"Network error: {e}, retrying {attempt + 1}/{max_retries}..."
