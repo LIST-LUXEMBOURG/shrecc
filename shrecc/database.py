@@ -5,6 +5,7 @@
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
+import re
 
 import bw2data as bd
 import numpy as np
@@ -375,12 +376,24 @@ def map_known_inputs(eidb_name, dataframe_filt):
     ei_db = bd.Database(eidb_name)
     ei_db_data = ei_db.load()
     known_inputs = {}
+    country_to_code = {
+        "Germany": "DE",
+        "France": "FR",
+    }
     for idx in dataframe_filt.index:
         loc, name, prod, unit = idx
         # Region names in ENTSOE and ecoinvent don't exactly match
         # Only UK seems concerned but consider using a dictionary
         if loc == "UK":
             loc = "GB"
+        # For ecoinvent > 3.10, the activity names have changed
+        # They now use a country code, instead of a full name
+        # We deal with them here:
+        def repl(match):
+            return f"from {country_to_code[match.group(1)]}"
+        if any(v in eidb_name for v in ("3.11", "3.12")):
+            pattern = re.compile(r"from (Germany|France)")
+            name = pattern.sub(repl, name)
         q = Query()
         filter_name = Filter("name", "is", name)
         filter_loc = Filter("location", "is", loc)
