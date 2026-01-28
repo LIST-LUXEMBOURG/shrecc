@@ -421,7 +421,7 @@ def get_network_activities(eidb_name):
         "market for transmission network, electricity, high voltage direct current subsea cable",
         "transmission network construction, electricity, high voltage",
     ]
-    if "3.11" in eidb_name:
+    if any(v in eidb_name for v in ("3.10", "3.11", "3.12")):
         locations = [
             "GLO",
             "GLO",
