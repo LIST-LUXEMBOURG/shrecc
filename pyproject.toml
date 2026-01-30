@@ -33,7 +33,7 @@ dependencies = [
    # You can add version requirements like "foo>2.0"
    "bw2data>=4.4.2",
    "pypardiso",
-   "pandas>=2",
+   "pandas>=2,<3",
    "numpy<3",
    'numpy>2;python_version>="3.13"',
    "requests>=2.32",
