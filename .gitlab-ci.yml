@@ -1,6 +1,7 @@
 ---
 
 stages:
+- test
 - generate_deps
 - build
 - publish
@@ -9,6 +10,7 @@ variables:
   # The repo originally includes a lot of data that can render the pipeline slow
   GIT_STRATEGY: fetch
   PY_PACKAGE_NAME: SHRECC
+  UV_CACHE_DIR: .uv-cache
 
 generate_deps:
   # job to create the license and dependency graph
@@ -58,4 +60,46 @@ publish_pypi:
     - build_pip_pkg
   rules:
     - if: ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop")
+
+
+
+# Hidden template: reuse across all Python versions
+.pytest_template: &pytest_template
+  stage: test
+  image: ghcr.io/astral-sh/uv:bookworm-slim
+  before_script:
+    # Ensure the version is set, then install that interpreter
+    - test -n "$PYTHON_VERSION" || { echo "PYTHON_VERSION not set"; exit 2; }
+    - uv venv --python "$PYTHON_VERSION"
+    # Install deps (incl. dev) from pyproject/lockfile
+    - uv pip install pytest pytest-cov pypardiso
+  script:
+    # Run pytest using the selected Python version via uv
+    - uv run --python "$PYTHON_VERSION" pytest 
+    #-v --maxfail=1 --disable-warnings
+  cache:
+    key: "uv-${PYTHON_VERSION}"
+    paths:
+      - .uv-cache
+
+
+pytest:3.10:
+  <<: *pytest_template
+  variables:
+    PYTHON_VERSION: "3.10"
+
+pytest:3.11:
+  <<: *pytest_template
+  variables:
+    PYTHON_VERSION: "3.11"
+
+pytest:3.12:
+  <<: *pytest_template
+  variables:
+    PYTHON_VERSION: "3.12"
+
+pytest:3.13:
+  <<: *pytest_template
+  variables:
+    PYTHON_VERSION: "3.13"
 
