@@ -62,7 +62,8 @@ def filt_cutoff(
         raise ValueError("Either `times` or `general_range` must be provided")
 
     dataframe = tech_mapping(year, path_to_data)
-    print("Filtering dataframe...")
+    now = datetime.now()
+    print(f"{now} Filtering dataframe...")
     dataframe = dataframe.droplevel("source", axis=1)
     dataframe = filter_by_countries(dataframe, countries)
 
@@ -71,7 +72,8 @@ def filt_cutoff(
     if general_range:
         dataframe = filter_by_range(dataframe, general_range, refined_range, freq)
     dataframe = apply_cutoff(dataframe, cutoff, include_cutoff)
-    print("Dataframe filtered.")
+    now = datetime.now()
+    print(f"{now} Dataframe filtered.")
     return dataframe
 
 
@@ -193,7 +195,8 @@ def tech_mapping(year, path_to_data, path_to_mapping=None):
     Returns:
         pd.DataFrame: A DataFrame with the scaled technology mappings.
     """
-    print("Mapping technologies...")
+    now = datetime.now()
+    print(f"{now} Mapping technologies...")
     if path_to_mapping:
         el_map_all_norm = load_mapping_data(path_to_mapping)
     else:
@@ -236,7 +239,8 @@ def tech_mapping(year, path_to_data, path_to_mapping=None):
             LCI_cons_scaled,
             Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl"),
         )
-    print("Technologies mapped.")
+    now = datetime.now()
+    print(f"{now} Technologies mapped.")
     return LCI_cons_scaled
 
 

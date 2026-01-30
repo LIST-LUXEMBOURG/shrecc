@@ -328,7 +328,7 @@ def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, data_dir):
     print(f"{now} Applying load losses")
     results_load = apply_load_losses(Z_load)
     save_to_pickle(results_load, filename_load)
-    print("{now} Load losses applied and saved")
+    print(f"{now} Load losses applied and saved")
 
     return results, results_load
 
@@ -359,7 +359,8 @@ def process_results_light(results, filename, n_c):
             else:
                 results_light[k] = csc_matrix(v[:, -n_c:], dtype="float32")
 
-        print("Results light computation finished")
+        now = datetime.now()
+        print(f"{now} Results light computation finished")
     save_to_pickle(results_light, filename)
     return results_light
 
