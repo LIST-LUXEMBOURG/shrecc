@@ -46,11 +46,11 @@ _and_ in the documentation at [read the docs](https://shrecc.readthedocs.io/en/l
 
 ## Contributing
 
-Please take a look at the [DEVELOPPING.md](DEVELOPPING.md) file for details on how to contribute code to the repository.
+Please take a look at the [DEVELOPPING.md](https://git.list.lu/shrecc_project/shrecc/-/blob/main/DEVELOPPING.md) file for details on how to contribute code to the repository.
 
 ## License
 
-Copyright © 2024 Luxembourg Institute of Science and Technology
+Copyright © 2025 Luxembourg Institute of Science and Technology
 Licensed under the MIT License.
 
 ## Authors

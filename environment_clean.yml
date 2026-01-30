@@ -37,4 +37,5 @@ dependencies:
       - brightway25==1.0.6
       - stats_arrays
       - bw2io[multifunctional]
-      
+      - pytest
+      - pytest-cov

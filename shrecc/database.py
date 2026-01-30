@@ -5,6 +5,7 @@
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
+import re
 
 import bw2data as bd
 import numpy as np
@@ -25,7 +26,7 @@ def filt_cutoff(
     path_to_data=None,
 ):
     """
-    Filters data based on selected countries and times (either one-off, a range, or periodical range). Gets called from `create_database()`.
+    Filters data based on selected countries and times (either one-off, a range, or periodical range).
 
     Args:
         year (int): Selected year of the downloaded data.
@@ -42,7 +43,7 @@ def filt_cutoff(
         cutoff (float): Cutoff value for technology values.
         include_cutoff (bool): If True, cutoff is applied and summed at the end to create a new technology "The rest".
             If False, cutoff is applied but new technology not created.
-        path_to_data (Path): location of the data. If none, the data is taken from within the package.
+        path_to_data (str or str or Path): location of the data. If none, the data is taken from within the package.
 
     Returns:
         pd.DataFrame: The filtered dataframe.
@@ -52,11 +53,19 @@ def filt_cutoff(
         path_to_data = Path(path_to_data)
     else:
         path_to_data = files("shrecc.data")
-    year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
+
+    if general_range:
+        year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
+    elif times:
+        year = datetime.strptime(times[0], "%Y-%m-%d %H:%M:%S").year
+    else:
+        raise ValueError("Either `times` or `general_range` must be provided")
+
     dataframe = tech_mapping(year, path_to_data)
     print("Filtering dataframe...")
     dataframe = dataframe.droplevel("source", axis=1)
     dataframe = filter_by_countries(dataframe, countries)
+
     if times:
         dataframe = filter_by_times(dataframe, times)
     if general_range:
@@ -66,21 +75,33 @@ def filt_cutoff(
     return dataframe
 
 
-def load_mapping_data(data_dir):
+def load_mapping_data(mapping_location):
     """
     Load the mapping data from an Excel file.
+    mapping_collection can be either a string pointing to a full file, or a directory.
+    If it is a directory, it will assume that the file name is `el_map_all_norm.csv`
 
     Args:
-        data_dir (str or Path): The path to the directory containing the mapping data.
+        mapping_location (str or Path): a full filename as string or path to the scaled technology mapping.
 
     Returns:
         pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
     """
-    return pd.read_csv(
-        data_dir / "el_map_all_norm.csv",
+    if isinstance(mapping_location, str):
+        mapping_file = Path(mapping_location)
+    elif isinstance(mapping_location, Path) and mapping_location.is_dir():
+        mapping_file = mapping_location / "el_map_all_norm.csv"
+    elif isinstance(mapping_location, Path) and mapping_location.is_file():
+        mapping_file = mapping_location
+    else:
+        # We will use the file included in the SHRECC.data module
+        mapping_file = mapping_location / "el_map_all_norm.csv"
+    df = pd.read_csv(
+        mapping_file,
         index_col=[0, 1, 2, 3],
         header=[0, 1],
     )
+    return df
 
 
 def load_time_series_data(path_to_data, year):
@@ -94,6 +115,7 @@ def load_time_series_data(path_to_data, year):
     Returns:
         pd.DataFrame: A DataFrame containing the time series data, with levels reordered and sorted.
     """
+    path_to_data = Path(path_to_data)
     filename = path_to_data / f"{year}" / f"indices_{year}.pkl"
     indices = load_from_pickle(filename)
     Z_cons_sp = load_from_pickle(path_to_data / f"{year}" / f"Z_cons_{year}.pkl")
@@ -118,7 +140,10 @@ def prepare_consumption_data(Z_cons):
         pd.DataFrame: The prepared consumption data, with the trade data removed and indices swapped.
     """
     Z_cons = Z_cons.sort_index()
-    Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
+    if "trade" in Z_cons.index.get_level_values("source"):
+        Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
+    else:
+        Z_cons_to_multiply = Z_cons.copy()
     Z_cons_to_multiply.index.names = ["source", "geography_mix"]
     return Z_cons_to_multiply.swaplevel()
 
@@ -146,6 +171,7 @@ def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
         el_map_to_multiply["UK"].columns
     ].astype("float32")
 
+    el_map_to_multiply = el_map_to_multiply.fillna(0)
     LCI_cons = el_map_to_multiply.dot(Z_cons_to_multiply)
 
     if LCI_cons.isna().sum().sum():
@@ -154,20 +180,25 @@ def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
     return LCI_cons
 
 
-def tech_mapping(year, path_to_data):
+def tech_mapping(year, path_to_data, path_to_mapping=None):
     """
     Main function to map the technologies and scale them to 1 kWh.
 
     Args:
         year (int): The year corresponding to the data.
-        path_to_data (path): Root directory of the mapping data.
+        path_to_data (str or Path): Root directory of the data.
+        path_to_mapping (str or Path): File with the mapping of the scaled technology mappings.
+                                        If None, it will use the mapping from the package.
 
     Returns:
         pd.DataFrame: A DataFrame with the scaled technology mappings.
     """
     print("Mapping technologies...")
-    data_dir = files("shrecc.data")
-    el_map_all_norm = load_mapping_data(data_dir)
+    if path_to_mapping:
+        el_map_all_norm = load_mapping_data(path_to_mapping)
+    else:
+        data_dir = files("shrecc.data")
+        el_map_all_norm = load_mapping_data(data_dir)
     Z_cons = load_time_series_data(path_to_data, year)
     Z_cons_to_multiply = prepare_consumption_data(Z_cons)
     filename = Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl")
@@ -259,20 +290,23 @@ def filter_by_range(dataframe, general_range, refined_range, freq):
     df_filt = dataframe.loc[:, general_range[0] : general_range[1]]
     if refined_range and len(refined_range) > 1:
         timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq, normalize=True
-        ) + pd.Timedelta(hours=refined_range[0])
+            start=general_range[0], end=general_range[1], freq=freq
+        )
         timestamps_range = timestamp[
             (timestamp.hour >= refined_range[0]) & (timestamp.hour <= refined_range[1])
         ]
         df_filt = df_filt.loc[
-            :, df_filt.columns.get_level_values("time").isin(timestamps_range)
+            :,
+            pd.to_datetime(df_filt.columns.get_level_values("time")).isin(
+                timestamps_range
+            ),
         ]
     elif refined_range and len(refined_range) == 1:
         timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq, normalize=True
-        ) + pd.Timedelta(hours=refined_range[0])
+            start=general_range[0], end=general_range[1], freq=freq
+        )
         df_filt = df_filt.loc[
-            :, df_filt.columns.get_level_values("time").isin(timestamp)
+            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamp)
         ]
     return df_filt.T.groupby(level="country").mean().T
 
@@ -342,12 +376,24 @@ def map_known_inputs(eidb_name, dataframe_filt):
     ei_db = bd.Database(eidb_name)
     ei_db_data = ei_db.load()
     known_inputs = {}
+    country_to_code = {
+        "Germany": "DE",
+        "France": "FR",
+    }
     for idx in dataframe_filt.index:
         loc, name, prod, unit = idx
         # Region names in ENTSOE and ecoinvent don't exactly match
         # Only UK seems concerned but consider using a dictionary
         if loc == "UK":
             loc = "GB"
+        # For ecoinvent > 3.10, the activity names have changed
+        # They now use a country code, instead of a full name
+        # We deal with them here:
+        def repl(match):
+            return f"from {country_to_code[match.group(1)]}"
+        if any(v in eidb_name for v in ("3.11", "3.12")):
+            pattern = re.compile(r"from (Germany|France)")
+            name = pattern.sub(repl, name)
         q = Query()
         filter_name = Filter("name", "is", name)
         filter_loc = Filter("location", "is", loc)
@@ -388,7 +434,7 @@ def get_network_activities(eidb_name):
         "market for transmission network, electricity, high voltage direct current subsea cable",
         "transmission network construction, electricity, high voltage",
     ]
-    if "3.11" in eidb_name:
+    if any(v in eidb_name for v in ("3.10", "3.11", "3.12")):
         locations = [
             "GLO",
             "GLO",
@@ -431,6 +477,7 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
     Args:
         dataframe_filt (pd.DataFrame): The filtered dataframe containing technology data.
         known_inputs (dict): A dictionary mapping known inputs to ecoinvent database entries.
+        known_inputs_network (dict): A dictionary mapping known network inputs to ecoinvent database entries.
         db_name (str): The name of the BW database.
 
     Returns:
@@ -564,6 +611,7 @@ def create_database(dataframe_filt, project_name, db_name, eidb_name, network="T
         project_name (str): BW project name to which the database will be saved.
         db_name (str): Name of the BW database to be created.
         eidb_name (str): Name of the ecoinvent database. Must be the same as in the BW project.
+        network (bool): If True, network activities will be considered.
 
     Returns:
         None
