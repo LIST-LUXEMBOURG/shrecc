@@ -295,7 +295,8 @@ def calculate_results(year, n_c, n_p, t_index, Z_net, Z_load, data_dir):
             for t in t_index:
                 if t.month != month:
                     month = t.month
-                    print(f"month {month}/{t.year}")
+                    now = datetime.now()
+                    print(f"{now} month {month}/{t.year}")
                 processor(data, t, I, results)
             save_to_pickle(results, filename)
         return results
