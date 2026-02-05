@@ -1,6 +1,10 @@
 SHRECC CHANGELOG
 ================
 
+## 0.0.5 - 2026-02-04
+
++ fix issue #30 - add production exchanges.
+
 ## 0.0.4 - 2026-01-29
 
 + fix issue # 23 - add functions to parse the mix from ned.l
