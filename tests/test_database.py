@@ -1,6 +1,8 @@
 import pytest
 import pandas as pd
+import bw2data as bd
 import numpy as np
+from packaging.version import parse as vparse
 from pytest import approx
 from unittest.mock import patch, MagicMock
 import types
@@ -917,7 +919,6 @@ def test_filter_by_times_no_matching_times():
 # Tests for: filter_by_range() — requires multiple sub-tests
 # ────────────────────────────────────────────────────────────────
 def test_filter_by_range_basic():
-
     time_range = pd.date_range(
         start="2023-06-01 00:00:00", end="2023-08-31 23:00:00", freq="h"
     )
@@ -1185,7 +1186,6 @@ def dummy_dataframe_for_filt_cutoff():
 def test_filt_cutoff_filtering_by_times(
     mock_df_tech_mapping, dummy_dataframe_for_filt_cutoff
 ):
-
     df = dummy_dataframe_for_filt_cutoff
     mock_df_tech_mapping.return_value = df
 
@@ -1222,7 +1222,6 @@ def test_filt_cutoff_filtering_by_times(
 def test_filt_cutoff_filtering_by_range(
     mock_df_tech_mapping, dummy_dataframe_for_filt_cutoff
 ):
-
     df = dummy_dataframe_for_filt_cutoff
     mock_df_tech_mapping.return_value = df
 
@@ -1338,7 +1337,6 @@ def test_setup_database_handles_multiple_calls(monkeypatch):
 # Tests for: tech_mapping() — requires multiple sub-tests
 # ──────────────────────────────────────────────────────────
 def test_get_network_activities_basic():
-
     eidb_name = "ecoinvent-3.8-cutoff"
     result = get_network_activities(eidb_name)
     assert isinstance(result, list)
@@ -1377,7 +1375,6 @@ def test_get_network_activities_basic():
 
 
 def test_get_network_activities_311():
-
     eidb_name = "ecoinvent-3.11-cutoff"
     result = get_network_activities(eidb_name)
     assert isinstance(result, list)
@@ -1388,7 +1385,6 @@ def test_get_network_activities_311():
 
 
 def test_get_network_activities_other_versions():
-
     # Should not match "3.11" if not present
     for eidb_name in ["ecoinvent 3.7", "ei3.8.1", "eco3.9", ""]:
         result = get_network_activities(eidb_name)
@@ -1671,9 +1667,19 @@ def test_create_activity_dict_basic(
         (db_name, "electricity 1"),
     }
     # Check structure of activity dict
+    bd_version = bd.__version__
+    if not isinstance(bd_version, str):
+        bd_version = ".".join(map(str, bd_version))
+    BW2 = vparse(bd_version) < vparse("4")
+    if BW2:
+        act_type = "process"
+        prod_exchange_type = "production"
+    else:
+        act_type = bd.labels.process_node_default
+        prod_exchange_type = bd.labels.production_edge_default
     for act in activities.values():
         assert act["unit"] == "kWh"
-        assert act["type"] == "process"
+        assert act["type"] == act_type
         assert isinstance(act["exchanges"], list)
         # Should have at least one exchange (the technology)
         assert any(e["type"] == "technosphere" for e in act["exchanges"])
@@ -1686,7 +1692,9 @@ def test_create_activity_dict_basic(
     # Check that the correct technology exchange is present for each activity
     # act0 is for ("2023-06-01 08:00:00", "FR")
     act0 = activities[(db_name, "electricity 0")]
-    inputs0 = [e["input"] for e in act0["exchanges"]]
+    inputs0 = [
+        e["input"] for e in act0["exchanges"] if e["type"] != prod_exchange_type
+    ]
     assert set(inputs0) == {
         "fr_hydro_ei",
         "net_trans_subsea",
@@ -1703,7 +1711,7 @@ def test_create_activity_dict_basic(
     assert tech_ex1[0]["amount"] == 5.5  # specific network
     # act1 is for ("2023-06-01 09:00:00", "DE")
     act1 = activities[(db_name, "electricity 1")]
-    inputs1 = [e["input"] for e in act1["exchanges"]]
+    inputs1 = [e["input"] for e in act1["exchanges"] if e["type"] != prod_exchange_type]
     assert set(inputs1) == {"de_wind_ei", "net_dist_lv", "net_trans_mv"}
     assert "net_trans_subsea" not in inputs1
     assert "net_trans_ch" not in inputs1
@@ -1716,6 +1724,14 @@ def test_create_activity_dict_basic(
 def test_create_activity_dict_no_network_exchanges(
     mock_get_network_activities, sample_dataframe_filt, known_inputs_fixture
 ):
+    bd_version = bd.__version__
+    if not isinstance(bd_version, str):
+        bd_version = ".".join(map(str, bd_version))
+    BW2 = vparse(bd_version) < vparse("4")
+    if BW2:
+        prod_exchange_type = "production"
+    else:
+        prod_exchange_type = bd.labels.production_edge_default
     # No known_inputs_network, so only technology exchanges
     mock_get_network_activities.return_value = []
     db_name = "test_db"
@@ -1727,8 +1743,11 @@ def test_create_activity_dict_no_network_exchanges(
     )
     for act in activities.values():
         # Only technology exchanges should be present
+        technospere_exchanges = [
+            e for e in act["exchanges"] if e["type"] != prod_exchange_type
+        ]
         assert all(
-            e["input"] in known_inputs_fixture.values() for e in act["exchanges"]
+            e["input"] in known_inputs_fixture.values() for e in technospere_exchanges
         )
 
 

@@ -1,9 +1,10 @@
-# Copyright © 2024 Luxembourg Institute of Science and Technology
+# Copyright © 2024,2025,2026 Luxembourg Institute of Science and Technology
 # Licensed under the MIT License (see LICENSE file for details).
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
 from datetime import datetime
 from importlib.resources import files
+from packaging.version import parse as vparse
 from pathlib import Path
 import re
 
@@ -13,6 +14,8 @@ import pandas as pd
 from bw2data.query import Filter, Query
 
 from shrecc.treatment import load_from_pickle, save_to_pickle
+
+UNUSED_SOURCE = "Import balance (physical)"
 
 
 def filt_cutoff(
@@ -142,11 +145,13 @@ def prepare_consumption_data(Z_cons):
         pd.DataFrame: The prepared consumption data, with the trade data removed and indices swapped.
     """
     Z_cons = Z_cons.sort_index()
+
     if "trade" in Z_cons.index.get_level_values("source"):
         Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
     else:
         Z_cons_to_multiply = Z_cons.copy()
     Z_cons_to_multiply.index.names = ["source", "geography_mix"]
+
     return Z_cons_to_multiply.swaplevel()
 
 
@@ -390,11 +395,13 @@ def map_known_inputs(eidb_name, dataframe_filt):
         # Only UK seems concerned but consider using a dictionary
         if loc == "UK":
             loc = "GB"
+
         # For ecoinvent > 3.10, the activity names have changed
         # They now use a country code, instead of a full name
         # We deal with them here:
         def repl(match):
             return f"from {country_to_code[match.group(1)]}"
+
         if any(v in eidb_name for v in ("3.11", "3.12")):
             pattern = re.compile(r"from (Germany|France)")
             name = pattern.sub(repl, name)
@@ -497,15 +504,36 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
             country = col
             name = f"Electricity mix in {country}"
         code = f"electricity {i}"
+        bd_version = bd.__version__
+        if not isinstance(bd_version, str):
+            bd_version = ".".join(map(str, bd_version))
+        BW2 = vparse(bd_version) < vparse("4")
+        if BW2:
+            act_type = "process"
+            prod_exchange_type = "production"
+        else:
+            act_type = bd.labels.process_node_default
+            prod_exchange_type = bd.labels.production_edge_default
         act = {
             "name": name,
             "unit": "kWh",
             "code": code,
             "location": str(country),
             "reference product": "Electricity mix",
-            "type": "process",
+            "type": act_type,
             "exchanges": [],
         }
+        # Add the production exchange
+        act["exchanges"].append(
+            {
+                "input": (db_name, code),
+                "name": name,
+                "location": str(country),
+                "unit": "kWh",
+                "amount": 1,
+                "type": prod_exchange_type,
+            }
+        )
         for idx in dataframe_filt.index:
             source, exch_name, prod, unit = idx
             if float(dataframe_filt.loc[idx, col]) != 0:
