@@ -40,6 +40,10 @@ dependencies = [
    "fs",
    "scipy>=1.14",
    "appdirs",
+   "premise",
+   "jupyterlab",
+   "matplotlib>=3.10.9",
+   "jupyter-black>=0.4.0",
 ]
 license="MIT"
 license-files = ["LICENSE"]
