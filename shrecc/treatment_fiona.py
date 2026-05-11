@@ -1,9 +1,11 @@
 """Alternative hourly electricity consumption-mix calculation.
 
 This module contains an xarray-oriented variant of the treatment workflow.  It
-starts from the raw hourly TYNDP production and cross-border exchange pickle
-files, builds a gross supply table, and returns, for each consuming country and
-hour, the technology and country of origin of the electricity consumed.
+starts from the raw hourly TYNDP production and cross-border exchange data,
+builds a gross supply table, and returns, for each consuming country and hour,
+the technology and country of origin of the electricity consumed. The TYNDP
+data can be provided either as the original Excel/XLSB workbook or as pickled
+DataFrames extracted from that workbook.
 
 The core idea is to avoid building the full square technology-country network.
 Only the country-to-country trade block is inverted.  Domestic production shares
@@ -15,6 +17,7 @@ import pickle
 import warnings
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -95,6 +98,107 @@ def build_z_gross_from_tyndp_pickles(
     production = _load_pickle(production_pickle).copy()
     trade = _load_pickle(trade_pickle).copy()
 
+    return _build_z_gross_from_tyndp_tables(
+        production=production,
+        trade=trade,
+        technology_mapping=technology_mapping,
+        country_mapping=country_mapping,
+        model_year=model_year,
+        technology_sheet=technology_sheet,
+        countries_sheet=countries_sheet,
+        connections_sheet=connections_sheet,
+        verbose=verbose,
+    )
+
+
+def build_z_gross_from_tyndp_excel(
+    excel_file,
+    technology_mapping,
+    country_mapping,
+    model_year=2050,
+    production_sheet="Hourly Market Data emarket",
+    trade_sheet="Crossborder exchanges",
+    technology_sheet="concordance",
+    countries_sheet="countries",
+    connections_sheet="connections",
+    engine="pyxlsb",
+    verbose=False,
+):
+    """Build the gross hourly supply table directly from the TYNDP workbook.
+
+    Parameters
+    ----------
+    excel_file : str or pathlib.Path
+        Original TYNDP Excel/XLSB workbook containing the hourly production and
+        cross-border exchange sheets.
+    technology_mapping, country_mapping
+        See :func:`build_z_gross_from_tyndp_pickles`.
+    model_year : int, default 2050
+        Year appended to the TYNDP day/month/hour labels when constructing the
+        hourly datetime index.
+    production_sheet : str, default "Hourly Market Data emarket"
+        Sheet containing hourly production data.
+    trade_sheet : str, default "Crossborder exchanges"
+        Sheet containing hourly cross-border exchanges.
+    technology_sheet, countries_sheet, connections_sheet
+        See :func:`build_z_gross_from_tyndp_pickles`.
+    engine : str or None, default "pyxlsb"
+        Excel engine passed to :func:`pandas.read_excel`. The original TYNDP
+        workbook used in the notebook is ``.xlsb``, so ``"pyxlsb"`` is the
+        default. Use ``None`` to let pandas infer the engine for ordinary
+        ``.xlsx`` files.
+    verbose : bool, default False
+        If True, print progress messages for reading, parsing, and aggregation.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Gross hourly supply table with the same structure as
+        :func:`build_z_gross_from_tyndp_pickles`.
+    """
+    _log("Reading hourly production sheet from TYNDP workbook", verbose)
+    production = _read_excel_dataframe(
+        excel_file,
+        sheet_name=production_sheet,
+        header=[10, 11, 12],
+        index_col=[0, 1],
+        engine=engine,
+    )
+
+    _log("Reading cross-border exchange sheet from TYNDP workbook", verbose)
+    trade = _read_excel_dataframe(
+        excel_file,
+        sheet_name=trade_sheet,
+        header=[10],
+        index_col=[0, 1],
+        engine=engine,
+    )
+
+    return _build_z_gross_from_tyndp_tables(
+        production=production,
+        trade=trade,
+        technology_mapping=technology_mapping,
+        country_mapping=country_mapping,
+        model_year=model_year,
+        technology_sheet=technology_sheet,
+        countries_sheet=countries_sheet,
+        connections_sheet=connections_sheet,
+        verbose=verbose,
+    )
+
+
+def _build_z_gross_from_tyndp_tables(
+    production,
+    trade,
+    technology_mapping,
+    country_mapping,
+    model_year,
+    technology_sheet,
+    countries_sheet,
+    connections_sheet,
+    verbose,
+):
+    """Build ``Z_gross`` from already-loaded TYNDP production and trade tables."""
     _log("Parsing hourly datetime index", verbose)
     production.index = _parse_tyndp_datetime_index(production.index, model_year)
     trade.index = _parse_tyndp_datetime_index(trade.index, model_year)
@@ -104,11 +208,12 @@ def build_z_gross_from_tyndp_pickles(
 
     _log("Loading technology and country mappings", verbose)
     concordance = _load_technology_concordance(technology_mapping, technology_sheet)
-    country_codes = pd.read_excel(
+    country_mapping_df = _read_excel_dataframe(
         country_mapping,
         sheet_name=countries_sheet,
         index_col=0,
-    )["Country code"]
+    )
+    country_codes = country_mapping_df["Country code"]
 
     _log("Aggregating hourly production by country and technology", verbose)
     production_agg = _aggregate_tyndp_production(
@@ -117,7 +222,7 @@ def build_z_gross_from_tyndp_pickles(
         country_codes,
     )
 
-    connections = pd.read_excel(
+    connections = _read_excel_dataframe(
         country_mapping,
         sheet_name=connections_sheet,
         index_col=0,
@@ -210,17 +315,110 @@ def consumption_mix_from_tyndp_pickles(
         verbose=verbose,
     )
 
-    result = consumption_mix_from_z_gross(
-        Z_gross,
-        check=check,
-        return_debug=return_debug,
+    if not return_debug:
+        return consumption_mix_from_z_gross(
+            Z_gross,
+            check=check,
+            return_debug=False,
+            verbose=verbose,
+        )
+
+    consumption_mix_xr, debug = cast(
+        tuple[xr.DataArray, dict[str, object]],
+        consumption_mix_from_z_gross(
+            Z_gross,
+            check=check,
+            return_debug=True,
+            verbose=verbose,
+        ),
+    )
+    debug["Z_gross"] = Z_gross
+
+    return consumption_mix_xr, debug
+
+
+def consumption_mix_from_tyndp_excel(
+    excel_file,
+    technology_mapping,
+    country_mapping,
+    model_year=2050,
+    production_sheet="Hourly Market Data emarket",
+    trade_sheet="Crossborder exchanges",
+    technology_sheet="concordance",
+    countries_sheet="countries",
+    connections_sheet="connections",
+    check=True,
+    return_debug=False,
+    engine="pyxlsb",
+    verbose=False,
+):
+    """Run the full TYNDP workbook-to-consumption-mix pipeline.
+
+    This is the Excel/XLSB equivalent of
+    :func:`consumption_mix_from_tyndp_pickles`. It reads the production and
+    cross-border exchange sheets directly from the original TYNDP workbook,
+    builds ``Z_gross``, and calculates the hourly consumption mix.
+
+    Parameters
+    ----------
+    excel_file, technology_mapping, country_mapping
+        See :func:`build_z_gross_from_tyndp_excel`.
+    model_year : int, default 2050
+        Year used to construct the hourly datetime index from TYNDP labels.
+    production_sheet : str, default "Hourly Market Data emarket"
+        Sheet containing hourly production data.
+    trade_sheet : str, default "Crossborder exchanges"
+        Sheet containing hourly cross-border exchanges.
+    technology_sheet, countries_sheet, connections_sheet
+        See :func:`build_z_gross_from_tyndp_excel`.
+    check : bool, default True
+        Forwarded to :func:`consumption_mix_from_z_gross`.
+    return_debug : bool, default False
+        If True, return ``(consumption_mix_xr, debug)``. The debug dictionary
+        includes the constructed ``Z_gross`` table in addition to the coefficient
+        matrices returned by :func:`consumption_mix_from_z_gross`.
+    engine : str or None, default "pyxlsb"
+        Excel engine passed to :func:`pandas.read_excel`.
+    verbose : bool, default False
+        If True, print progress messages for reading, parsing, and solving.
+
+    Returns
+    -------
+    xarray.DataArray or tuple[xarray.DataArray, dict]
+        Hourly consumption mix by consuming country, producing country, and
+        technology.
+    """
+    Z_gross = build_z_gross_from_tyndp_excel(
+        excel_file=excel_file,
+        technology_mapping=technology_mapping,
+        country_mapping=country_mapping,
+        model_year=model_year,
+        production_sheet=production_sheet,
+        trade_sheet=trade_sheet,
+        technology_sheet=technology_sheet,
+        countries_sheet=countries_sheet,
+        connections_sheet=connections_sheet,
+        engine=engine,
         verbose=verbose,
     )
 
     if not return_debug:
-        return result
+        return consumption_mix_from_z_gross(
+            Z_gross,
+            check=check,
+            return_debug=False,
+            verbose=verbose,
+        )
 
-    consumption_mix_xr, debug = result
+    consumption_mix_xr, debug = cast(
+        tuple[xr.DataArray, dict[str, object]],
+        consumption_mix_from_z_gross(
+            Z_gross,
+            check=check,
+            return_debug=True,
+            verbose=verbose,
+        ),
+    )
     debug["Z_gross"] = Z_gross
 
     return consumption_mix_xr, debug
@@ -230,6 +428,22 @@ def _load_pickle(filename):
     """Load a pickled object from disk."""
     with Path(filename).open("rb") as handle:
         return pickle.load(handle)
+
+
+def _read_excel_dataframe(filename, **kwargs):
+    """Read one Excel sheet and return it as a DataFrame.
+
+    ``pandas.read_excel`` has several overloads because it can return either a
+    DataFrame or a dictionary of DataFrames. In this module every call reads a
+    single sheet, so the runtime result is a DataFrame. The cast keeps static
+    checkers such as Pylance from treating the result as a union.
+    """
+    read_kwargs: dict[str, Any] = dict(kwargs)
+
+    if read_kwargs.get("engine") is None:
+        read_kwargs.pop("engine")
+
+    return cast(pd.DataFrame, pd.read_excel(filename, **read_kwargs))
 
 
 def _log(message, verbose):
@@ -267,7 +481,7 @@ def _parse_tyndp_datetime_index(index, model_year):
 
 def _load_technology_concordance(filename, sheet_name):
     """Read and normalize the technology concordance used to filter production."""
-    concordance = pd.read_excel(
+    concordance = _read_excel_dataframe(
         filename,
         sheet_name=sheet_name,
         index_col=0,
@@ -298,15 +512,18 @@ def _aggregate_tyndp_production(production, accepted_categories, country_codes):
     country_nodes = production.columns.get_level_values(country_level)
 
     mapped_countries = _map_tyndp_nodes_to_countries(country_nodes, country_codes)
+    category_values = categories.to_numpy()
+    mapped_country_values = mapped_countries.to_numpy()
     keep_columns = (
-        categories.isin(accepted_categories) & mapped_countries.notna().to_numpy()
+        np.asarray(categories.isin(accepted_categories))
+        & mapped_countries.notna().to_numpy()
     )
 
     production = production.loc[:, keep_columns]
     production.columns = pd.MultiIndex.from_arrays(
         [
-            mapped_countries.iloc[keep_columns].to_numpy(),
-            categories[keep_columns],
+            mapped_country_values[keep_columns],
+            category_values[keep_columns],
         ],
         names=["Country", "Source"],
     )
