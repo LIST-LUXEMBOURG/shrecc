@@ -440,7 +440,7 @@ def _read_excel_dataframe(filename, **kwargs):
     """
     read_kwargs: dict[str, Any] = dict(kwargs)
 
-    if read_kwargs.get("engine") is None:
+    if "engine" in read_kwargs and read_kwargs["engine"] is None:
         read_kwargs.pop("engine")
 
     return cast(pd.DataFrame, pd.read_excel(filename, **read_kwargs))
