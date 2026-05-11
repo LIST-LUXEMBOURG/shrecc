@@ -6,7 +6,7 @@ Simple Hourly Resolution Electricity Consumption Calculation
 
 SHRECC package is a python package directly compatible with Brightway2 or Brightway2.5 to create time-aware electricity databases. For any given year and countries (check availability on https://api.energy-charts.info/), download and prepare data for low-voltage electricity consumption.
 
-## Features
+## SHRECC features
 
 - **High-resolution electricity mixes** – Generates electricity life cycle inventories (LCIs) with **hourly** resolution, enhancing accuracy for life cycle assessment (LCA).
 - **Brightway2/2.5 compatibility** – Seamlessly integrates with Brightway, allowing direct use in existing LCA models.
@@ -15,6 +15,11 @@ SHRECC package is a python package directly compatible with Brightway2 or Bright
 - **Ecoinvent matching** – Aligns with **ecoinvent classifications**, converting from ENTSO-E datasets.
 - **User-controlled updates** – Enables **one-time or recurring** updates, allowing continuous tracking of electricity mix evolution over time.
 - **Optimized impact assessments** – Helps reduce uncertainty and improve **decision-making for electricity-intensive technologies** by considering real-time electricity mix variations.
+
+## FIONA features
+
+- This branch uses [TYNDP output files](https://2024.entsos-tyndp-scenarios.eu/download/) as a source to produce hourly consumption mixes
+- The pipeline is [TYNDP Excel file] -> [Z_gross flow matrix (production and trade)] -> [consumption_mix], you can recreate it at `notebooks/treatment_fiona.ipynb`
 
 ## Documentation
 
