@@ -19,7 +19,7 @@ SHRECC package is a python package directly compatible with Brightway2 or Bright
 ## FIONA features
 
 - This branch uses [TYNDP output files](https://2024.entsos-tyndp-scenarios.eu/download/) as a source to produce hourly consumption mixes
-- The pipeline is [TYNDP Excel file] -> [Z_gross flow matrix (production and trade)] -> [consumption_mix], you can recreate it at `notebooks/treatment_fiona.ipynb`
+- The pipeline is [TYNDP Excel file] -> [Z_gross flow matrix (production and trade)] -> [consumption_mix], you can recreate it at `notebooks/fiona_example.ipynb`
 
 ## Documentation
 
