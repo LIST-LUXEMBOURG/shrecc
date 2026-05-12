@@ -75,6 +75,7 @@ def get_prod(start, end, country, cumul=False, rolling=False):
 def get_trade(start, end, country):
     """
     Downloads trade data from the Energy Charts API. Gets called from `get_data()`.
+    Uses the "cbpf" endpoint of the API.
 
     Args:
         start (int): Start of the download period (output of `year_to_unix()`) in unix seconds.
@@ -295,6 +296,7 @@ def cleaning_data(data, data_dir):
     scale_dict = {"production mix": 1, "trade": 1000, "load": 1}
 
     for country in data.keys():
+        print(f"Processing country: {country}")
         data_clean[country.upper()] = {}
         for k, v in data[country].items():
             if type(v) is pd.DataFrame:  # axis = 1 will soon be depreciated
