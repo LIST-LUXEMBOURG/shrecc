@@ -4,6 +4,7 @@ SHRECC CHANGELOG
 ## 0.0.5 - 2026-02-04
 
 + fix issue #30 - add production exchanges.
++ fix issue #39 - allow `times` in filter_by_times to be of type DataIndex
 
 ## 0.0.4 - 2026-01-29
 
