@@ -915,6 +915,51 @@ def test_filter_by_times_no_matching_times():
     assert result.shape[1] == 0
 
 
+@pytest.mark.parametrize(
+    "times_input",
+    [
+        pytest.param(
+            ["2023-06-01 08:00:00", "2023-06-01 10:00:00"],
+            id="list_of_strings",
+        ),
+        pytest.param(
+            pd.to_datetime(["2023-06-01 08:00:00", "2023-06-01 10:00:00"]),
+            id="datetime_index",
+        ),
+    ],
+)
+def test_filter_by_times_accepts_strings_and_datetimeindex(times_input):
+    """filter_by_times should accept either a list of strings or a pd.DatetimeIndex
+    and produce the same filtered DataFrame, regardless of whether the columns'
+    `time` level is stored as strings or as datetime objects.
+    """
+    time_values = pd.to_datetime(
+        [
+            "2023-06-01 08:00:00",
+            "2023-06-01 09:00:00",
+            "2023-06-01 10:00:00",
+            "2023-06-01 11:00:00",
+        ]
+    )
+    countries = ["FR", "DE", "IT", "FR"]
+    columns = pd.MultiIndex.from_arrays(
+        [time_values, countries], names=["time", "country"]
+    )
+    index = pd.MultiIndex.from_tuples(
+        [("FR", "tech1", "electricity, high voltage", "kWh")],
+        names=["geography", "activityName", "prod", "unit"],
+    )
+    df = pd.DataFrame([[1, 2, 3, 4]], index=index, columns=columns)
+
+    result = filter_by_times(df, times_input)
+
+    expected_times = pd.to_datetime(["2023-06-01 08:00:00", "2023-06-01 10:00:00"])
+    assert isinstance(result, pd.DataFrame)
+    assert result.shape == (1, 2)
+    assert set(result.columns.get_level_values("time")) == set(expected_times)
+    assert list(result.values.flatten()) == [1, 3]
+
+
 # ────────────────────────────────────────────────────────────────
 # Tests for: filter_by_range() — requires multiple sub-tests
 # ────────────────────────────────────────────────────────────────
