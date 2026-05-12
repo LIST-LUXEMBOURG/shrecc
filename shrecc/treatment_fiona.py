@@ -13,6 +13,7 @@ are then projected through the resolved trade network to attribute each unit of
 country-level consumption back to producing technologies and countries.
 """
 
+import json
 import pickle
 import warnings
 from datetime import datetime
@@ -22,6 +23,9 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+
+DEFAULT_PREMISE_IAM_MODELS = ("remind", "image", "remind-eu")
 
 
 def build_z_gross_from_tyndp_pickles(
@@ -122,6 +126,8 @@ def build_z_gross_from_tyndp_excel(
     countries_sheet="countries",
     connections_sheet="connections",
     engine="pyxlsb",
+    production_pickle=None,
+    trade_pickle=None,
     verbose=False,
 ):
     """Build the gross hourly supply table directly from the TYNDP workbook.
@@ -147,6 +153,10 @@ def build_z_gross_from_tyndp_excel(
         workbook used in the notebook is ``.xlsb``, so ``"pyxlsb"`` is the
         default. Use ``None`` to let pandas infer the engine for ordinary
         ``.xlsx`` files.
+    production_pickle, trade_pickle : str or pathlib.Path, optional
+        If both are provided, save the raw extracted production and trade sheets
+        to these pickle files after reading the workbook. The saved files can be
+        reused with :func:`build_z_gross_from_tyndp_pickles`.
     verbose : bool, default False
         If True, print progress messages for reading, parsing, and aggregation.
 
@@ -155,6 +165,61 @@ def build_z_gross_from_tyndp_excel(
     pandas.DataFrame
         Gross hourly supply table with the same structure as
         :func:`build_z_gross_from_tyndp_pickles`.
+    """
+    production, trade = read_tyndp_excel_tables(
+        excel_file,
+        production_sheet=production_sheet,
+        trade_sheet=trade_sheet,
+        engine=engine,
+        production_pickle=production_pickle,
+        trade_pickle=trade_pickle,
+        verbose=verbose,
+    )
+
+    return _build_z_gross_from_tyndp_tables(
+        production=production,
+        trade=trade,
+        technology_mapping=technology_mapping,
+        country_mapping=country_mapping,
+        model_year=model_year,
+        technology_sheet=technology_sheet,
+        countries_sheet=countries_sheet,
+        connections_sheet=connections_sheet,
+        verbose=verbose,
+    )
+
+
+def read_tyndp_excel_tables(
+    excel_file,
+    production_sheet="Hourly Market Data emarket",
+    trade_sheet="Crossborder exchanges",
+    engine="pyxlsb",
+    production_pickle=None,
+    trade_pickle=None,
+    verbose=False,
+):
+    """Read raw TYNDP production and trade sheets from the workbook.
+
+    Parameters
+    ----------
+    excel_file : str or pathlib.Path
+        Original TYNDP Excel/XLSB workbook.
+    production_sheet : str, default "Hourly Market Data emarket"
+        Sheet containing hourly production data.
+    trade_sheet : str, default "Crossborder exchanges"
+        Sheet containing hourly cross-border exchanges.
+    engine : str or None, default "pyxlsb"
+        Excel engine passed to :func:`pandas.read_excel`.
+    production_pickle, trade_pickle : str or pathlib.Path, optional
+        If both are provided, save the raw extracted sheets to these pickle
+        files.
+    verbose : bool, default False
+        If True, print progress messages.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame]
+        Raw production and trade DataFrames as read from the workbook.
     """
     _log("Reading hourly production sheet from TYNDP workbook", verbose)
     production = _read_excel_dataframe(
@@ -174,17 +239,17 @@ def build_z_gross_from_tyndp_excel(
         engine=engine,
     )
 
-    return _build_z_gross_from_tyndp_tables(
-        production=production,
-        trade=trade,
-        technology_mapping=technology_mapping,
-        country_mapping=country_mapping,
-        model_year=model_year,
-        technology_sheet=technology_sheet,
-        countries_sheet=countries_sheet,
-        connections_sheet=connections_sheet,
-        verbose=verbose,
-    )
+    if production_pickle is not None or trade_pickle is not None:
+        if production_pickle is None or trade_pickle is None:
+            raise ValueError(
+                "production_pickle and trade_pickle must be provided together"
+            )
+
+        _log("Saving extracted TYNDP sheets as pickle files", verbose)
+        _save_pickle(production, production_pickle)
+        _save_pickle(trade, trade_pickle)
+
+    return production, trade
 
 
 def _build_z_gross_from_tyndp_tables(
@@ -424,10 +489,267 @@ def consumption_mix_from_tyndp_excel(
     return consumption_mix_xr, debug
 
 
+def build_premise_region_map(
+    countries,
+    iam_models=DEFAULT_PREMISE_IAM_MODELS,
+    topology_files=None,
+    on_missing_model="warn",
+):
+    """Map country codes to premise/IAM regions for one or more IAM models.
+
+    Parameters
+    ----------
+    countries : iterable of str
+        Country or ecoinvent geography codes to map, for example
+        ``["FR", "DE", "IT"]``.
+    iam_models : iterable of str, default ("remind", "image", "remind-eu")
+        IAM model names passed to :class:`premise.geomap.Geomap`.
+    topology_files : dict, optional
+        Optional mapping from IAM model names to topology JSON files. This is
+        useful when a topology exists upstream but is not shipped with the
+        installed premise package, as can happen for ``"remind-eu"``. The JSON
+        file is expected to map IAM region names to lists of country/geography
+        codes, like premise's own ``*-topology.json`` files.
+    on_missing_model : {"warn", "raise", "ignore"}, default "warn"
+        What to do if premise has no topology for a requested model. With
+        ``"warn"``, the returned column is filled with missing values and a
+        warning is emitted.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Table indexed by ``country`` with one column per requested IAM model.
+        Values are the corresponding premise/IAM region names.
+
+    Notes
+    -----
+    The mapping is delegated to ``premise.geomap.Geomap`` when the topology is
+    available in the installed package. If not, a model-specific file passed via
+    ``topology_files`` is used as a fallback.
+    """
+    if on_missing_model not in {"warn", "raise", "ignore"}:
+        raise ValueError("on_missing_model must be 'warn', 'raise', or 'ignore'")
+
+    from premise.geomap import Geomap
+
+    topology_files = topology_files or {}
+    country_index = pd.Index(list(countries), name="country").unique().sort_values()
+    region_map = pd.DataFrame(index=country_index)
+
+    for model in iam_models:
+        topology_file = topology_files.get(model)
+
+        if topology_file is not None:
+            region_map[model] = _map_countries_with_topology_file(
+                country_index,
+                topology_file,
+            )
+            continue
+
+        try:
+            geomap = Geomap(model)
+        except FileNotFoundError as exc:
+            if on_missing_model == "raise":
+                raise
+            if on_missing_model == "warn":
+                warnings.warn(
+                    "Could not build geography map for IAM model "
+                    f"{model!r}: {exc}",
+                    stacklevel=2,
+                )
+            region_map[model] = pd.NA
+            continue
+
+        region_map[model] = [
+            geomap.ecoinvent_to_iam_location(country) for country in country_index
+        ]
+
+    return region_map
+
+
+def map_consumption_mix_technologies_xr(
+    consumption_mix_xr,
+    technology_mapping,
+    technology_sheet="concordance",
+    check=True,
+):
+    """Map consumption-mix technologies while keeping the result as xarray.
+
+    Parameters
+    ----------
+    consumption_mix_xr : xarray.DataArray
+        Consumption mix returned by :func:`consumption_mix_from_z_gross`, with
+        a ``technology`` dimension containing the original TYNDP/ENTSO-E
+        technology labels.
+    technology_mapping : str, pathlib.Path, or pandas.DataFrame
+        Either the Excel workbook containing the technology concordance, or an
+        already-loaded concordance DataFrame. The concordance must be oriented
+        as ``premise_activity x technology``.
+    technology_sheet : str, default "concordance"
+        Sheet name used when ``technology_mapping`` is an Excel workbook.
+    check : bool, default True
+        If True, verify that mapped shares still sum to one for every ``time``
+        and ``consumer_country`` after summing over source countries and premise
+        activities.
+
+    Returns
+    -------
+    xarray.DataArray
+        Consumption mix with the original ``technology`` dimension aggregated
+        into ``premise_activity``.
+    """
+    if "technology" not in consumption_mix_xr.dims:
+        raise ValueError("consumption_mix_xr must have a 'technology' dimension")
+
+    if isinstance(technology_mapping, pd.DataFrame):
+        tech_map = technology_mapping.copy()
+    else:
+        tech_map = _load_technology_concordance(
+            technology_mapping,
+            technology_sheet,
+        )
+
+    technologies = consumption_mix_xr["technology"].to_index()
+    missing_technologies = technologies.difference(tech_map.columns)
+
+    if not missing_technologies.empty:
+        raise ValueError(
+            "No premise technology mapping found for: "
+            + ", ".join(map(str, missing_technologies.tolist()))
+        )
+
+    tech_map = tech_map.reindex(columns=technologies)
+    tech_map.index.name = "premise_activity"
+
+    weights = xr.DataArray(
+        tech_map.T.to_numpy(),
+        dims=("technology", "premise_activity"),
+        coords={
+            "technology": technologies,
+            "premise_activity": tech_map.index,
+        },
+        name="technology_weight",
+    )
+
+    mapped = xr.dot(consumption_mix_xr, weights, dims="technology")
+    mapped = mapped.rename("consumption_mix")
+    mapped = mapped.transpose(
+        *[dim for dim in consumption_mix_xr.dims if dim != "technology"],
+        "premise_activity",
+    )
+
+    if check:
+        total_dims = [
+            dim
+            for dim in ("source_country", "premise_activity")
+            if dim in mapped.dims
+        ]
+        totals = mapped.sum(total_dims)
+        np.testing.assert_allclose(totals.to_numpy(), 1, atol=1e-8)
+
+    return mapped
+
+
+def map_consumption_mix_regions_xr(
+    consumption_mix_xr,
+    premise_region_map,
+    iam_model,
+    source_dim="source_country",
+    region_dim="premise_region",
+    check=True,
+):
+    """Map source countries to premise/IAM regions while keeping xarray output."""
+    if source_dim not in consumption_mix_xr.dims:
+        raise ValueError(f"consumption_mix_xr must have a {source_dim!r} dimension")
+
+    if iam_model not in premise_region_map.columns:
+        raise ValueError(f"{iam_model!r} is not a column in premise_region_map")
+
+    source_countries = consumption_mix_xr[source_dim].to_index()
+    missing_countries = source_countries.difference(premise_region_map.index)
+
+    if not missing_countries.empty:
+        raise ValueError(
+            "No premise region mapping found for source countries: "
+            + ", ".join(map(str, missing_countries.tolist()))
+        )
+
+    regions_by_country = premise_region_map.loc[source_countries, iam_model]
+    missing_regions = regions_by_country[regions_by_country.isna()]
+
+    if not missing_regions.empty:
+        raise ValueError(
+            f"No {iam_model!r} premise region found for source countries: "
+            + ", ".join(map(str, missing_regions.index.tolist()))
+        )
+
+    premise_regions = pd.Index(regions_by_country.unique(), name=region_dim)
+    region_weights = pd.DataFrame(
+        0,
+        index=source_countries,
+        columns=premise_regions,
+        dtype=int,
+    )
+
+    for country, region in regions_by_country.items():
+        region_weights.loc[country, region] = 1
+
+    weights = xr.DataArray(
+        region_weights.to_numpy(),
+        dims=(source_dim, region_dim),
+        coords={
+            source_dim: source_countries,
+            region_dim: premise_regions,
+        },
+        name="region_weight",
+    )
+
+    mapped = xr.dot(consumption_mix_xr, weights, dims=source_dim)
+    mapped = mapped.rename("consumption_mix")
+    mapped = mapped.transpose(
+        *[dim for dim in consumption_mix_xr.dims if dim != source_dim],
+        region_dim,
+    )
+    mapped.attrs["iam_model"] = iam_model
+
+    if check:
+        total_dims = [
+            dim
+            for dim in (region_dim, "premise_activity", "technology")
+            if dim in mapped.dims
+        ]
+        totals = mapped.sum(total_dims)
+        np.testing.assert_allclose(totals.to_numpy(), 1, atol=1e-8)
+
+    return mapped
+
+
+def _map_countries_with_topology_file(countries, topology_file):
+    """Map countries using a premise-style topology JSON file."""
+    with Path(topology_file).open(encoding="utf-8") as handle:
+        topology = json.load(handle)
+
+    country_to_region = {}
+    for region, geographies in topology.items():
+        for geography in geographies:
+            country_to_region.setdefault(geography, region)
+
+    return [country_to_region.get(country, pd.NA) for country in countries]
+
+
 def _load_pickle(filename):
     """Load a pickled object from disk."""
     with Path(filename).open("rb") as handle:
         return pickle.load(handle)
+
+
+def _save_pickle(obj, filename):
+    """Save an object to a pickle file, creating parent directories if needed."""
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+
+    with filename.open("wb") as handle:
+        pickle.dump(obj, handle)
 
 
 def _read_excel_dataframe(filename, **kwargs):
