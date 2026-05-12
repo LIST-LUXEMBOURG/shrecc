@@ -59,8 +59,9 @@ def filt_cutoff(
 
     if general_range:
         year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
-    elif times:
-        year = datetime.strptime(times[0], "%Y-%m-%d %H:%M:%S").year
+    elif len(times):
+        times = pd.to_datetime(times)
+        year = times[0].year
     else:
         raise ValueError("Either `times` or `general_range` must be provided")
 
