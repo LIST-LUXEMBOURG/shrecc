@@ -20,7 +20,7 @@ UNUSED_SOURCE = "Import balance (physical)"
 
 def filt_cutoff(
     countries,
-    times=0,
+    times=[],
     general_range=0,
     refined_range=0,
     freq=0,
@@ -59,8 +59,9 @@ def filt_cutoff(
 
     if general_range:
         year = datetime.strptime(general_range[0], "%Y-%m-%d %H:%M:%S").year
-    elif times:
-        year = datetime.strptime(times[0], "%Y-%m-%d %H:%M:%S").year
+    elif len(times):
+        times = pd.to_datetime(times)
+        year = times[0].year
     else:
         raise ValueError("Either `times` or `general_range` must be provided")
 
@@ -70,7 +71,9 @@ def filt_cutoff(
     dataframe = dataframe.droplevel("source", axis=1)
     dataframe = filter_by_countries(dataframe, countries)
 
-    if times:
+    if len(times):
+        # For backwards compatibility and making sure datetime is used in the filtering
+        times = pd.to_datetime(times)
         dataframe = filter_by_times(dataframe, times)
     if general_range:
         dataframe = filter_by_range(dataframe, general_range, refined_range, freq)

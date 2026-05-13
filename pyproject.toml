@@ -44,6 +44,8 @@ dependencies = [
    "jupyterlab",
    "matplotlib>=3.10.9",
    "jupyter-black>=0.4.0",
+   "xarray",
+   "pyxlsb",
    "pytest>=9.0.3",
 ]
 license="MIT"
