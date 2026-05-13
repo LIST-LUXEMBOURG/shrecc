@@ -14,6 +14,7 @@ country-level consumption back to producing technologies and countries.
 """
 
 import pickle
+import zipfile
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +22,23 @@ from typing import Any, cast
 
 import numpy as np
 import pandas as pd
+import requests
 import xarray as xr
+
+TYNDP_SCENARIO_URL_ROOT = (
+    "https://2024-data.entsos-tyndp-scenarios.eu/files/scenarios-outputs"
+)
+TYNDP_SCENARIOS = {
+    "DE": "Distributed Energy",
+    "GA": "Global Ambition",
+    "NT": "National Trends",
+}
+TYNDP_SCENARIO_YEARS = {
+    "DE": (2035, 2040, 2050),
+    "GA": (2035, 2040, 2050),
+    "NT": (2030, 2040),
+}
+TYNDP_CLIMATE_YEARS = (1995, 2008, 2009)
 
 
 def build_z_gross_from_tyndp_pickles(
@@ -47,25 +64,27 @@ def build_z_gross_from_tyndp_pickles(
         read from the ``"Crossborder exchanges"`` sheet in the original
         workbook.
     technology_mapping : str or pathlib.Path
-        Excel workbook containing the technology concordance. The function uses
-        this file to keep only production categories that are mapped in the
-        concordance. It does not aggregate to premise activities here; the
-        resulting production technologies remain the original TYNDP/ENTSO-E
-        categories.
+        SHRECC/FIONA Excel workbook containing the technology concordance. The
+        function uses this file to keep only production categories that are
+        mapped in the concordance. It does not aggregate to premise activities
+        here; the resulting production technologies remain the original
+        TYNDP/ENTSO-E categories.
     country_mapping : str or pathlib.Path
-        Excel workbook containing country and connection mappings. Expected
-        sheets are ``countries_sheet`` and ``connections_sheet``.
+        SHRECC/FIONA Excel workbook containing country and connection mappings.
+        Expected sheets are ``countries_sheet`` and ``connections_sheet``.
     model_year : int, default 2050
         Year appended to the TYNDP day/month/hour labels when constructing the
         hourly datetime index.
     technology_sheet : str, default "concordance"
-        Sheet name in ``technology_mapping`` with technology/category mappings.
+        Sheet name in the SHRECC/FIONA ``technology_mapping`` workbook with
+        technology/category mappings.
     countries_sheet : str, default "countries"
-        Sheet name in ``country_mapping`` mapping TYNDP node labels to country
-        codes. The sheet is expected to have a ``"Country code"`` column.
+        Sheet name in the SHRECC/FIONA ``country_mapping`` workbook mapping
+        TYNDP node labels to country codes. The sheet is expected to have a
+        ``"Country code"`` column.
     connections_sheet : str, default "connections"
-        Sheet name in ``country_mapping`` mapping cross-border line labels to
-        ``"Country from"`` and ``"Country to"``.
+        Sheet name in the SHRECC/FIONA ``country_mapping`` workbook mapping
+        cross-border line labels to ``"Country from"`` and ``"Country to"``.
     verbose : bool, default False
         If True, print progress messages for the main parsing and aggregation
         steps.
@@ -139,11 +158,13 @@ def build_z_gross_from_tyndp_excel(
         Year appended to the TYNDP day/month/hour labels when constructing the
         hourly datetime index.
     production_sheet : str, default "Hourly Market Data emarket"
-        Sheet containing hourly production data.
+        Sheet in the original TYNDP workbook containing hourly production data.
     trade_sheet : str, default "Crossborder exchanges"
-        Sheet containing hourly cross-border exchanges.
+        Sheet in the original TYNDP workbook containing hourly cross-border
+        exchanges.
     technology_sheet, countries_sheet, connections_sheet
-        See :func:`build_z_gross_from_tyndp_pickles`.
+        Sheet names in the SHRECC/FIONA mapping workbooks. See
+        :func:`build_z_gross_from_tyndp_pickles`.
     engine : str or None, default "pyxlsb"
         Excel engine passed to :func:`pandas.read_excel`. The original TYNDP
         workbook used in the notebook is ``.xlsb``, so ``"pyxlsb"`` is the
@@ -201,9 +222,10 @@ def read_tyndp_excel_tables(
     excel_file : str or pathlib.Path
         Original TYNDP Excel/XLSB workbook.
     production_sheet : str, default "Hourly Market Data emarket"
-        Sheet containing hourly production data.
+        Sheet in the original TYNDP workbook containing hourly production data.
     trade_sheet : str, default "Crossborder exchanges"
-        Sheet containing hourly cross-border exchanges.
+        Sheet in the original TYNDP workbook containing hourly cross-border
+        exchanges.
     engine : str or None, default "pyxlsb"
         Excel engine passed to :func:`pandas.read_excel`.
     production_pickle, trade_pickle : str or pathlib.Path, optional
@@ -329,6 +351,90 @@ def _build_z_gross_from_tyndp_tables(
     return Z_gross
 
 
+def build_z_gross_from_tyndp_scenario(
+    scenario,
+    year,
+    climate_year,
+    data_dir,
+    technology_mapping,
+    country_mapping,
+    *,
+    download=True,
+    url_root=TYNDP_SCENARIO_URL_ROOT,
+    keep_zip=True,
+    session=None,
+    model_year=None,
+    production_sheet="Hourly Market Data emarket",
+    trade_sheet="Crossborder exchanges",
+    technology_sheet="concordance",
+    countries_sheet="countries",
+    connections_sheet="connections",
+    engine="pyxlsb",
+    verbose=False,
+):
+    """Build ``Z_gross`` for a TYNDP scenario, using cached files when possible.
+
+    If both pickle files already exist, they are loaded directly. Otherwise, an
+    existing workbook is parsed and the pickle files are created. If neither the
+    pickle files nor the workbook exist and ``download`` is true, the matching
+    zip file is downloaded and extracted first.
+
+    ``production_sheet`` and ``trade_sheet`` refer to sheets in the downloaded
+    TYNDP workbook. ``technology_sheet``, ``countries_sheet``, and
+    ``connections_sheet`` refer to sheets in the SHRECC/FIONA mapping workbooks.
+    """
+    paths = tyndp_scenario_paths(
+        data_dir=data_dir,
+        scenario=scenario,
+        year=year,
+        climate_year=climate_year,
+        url_root=url_root,
+    )
+    model_year = year if model_year is None else model_year
+
+    if paths["production_pickle"].exists() and paths["trade_pickle"].exists():
+        return build_z_gross_from_tyndp_pickles(
+            production_pickle=paths["production_pickle"],
+            trade_pickle=paths["trade_pickle"],
+            technology_mapping=technology_mapping,
+            country_mapping=country_mapping,
+            model_year=model_year,
+            technology_sheet=technology_sheet,
+            countries_sheet=countries_sheet,
+            connections_sheet=connections_sheet,
+            verbose=verbose,
+        )
+
+    if not paths["workbook"].exists():
+        ensure_tyndp_workbook(
+            scenario=scenario,
+            year=year,
+            climate_year=climate_year,
+            data_dir=data_dir,
+            download=download,
+            url_root=url_root,
+            keep_zip=keep_zip,
+            session=session,
+            verbose=verbose,
+        )
+
+    return build_z_gross_from_tyndp_excel(
+        excel_file=paths["workbook"],
+        technology_mapping=technology_mapping,
+        country_mapping=country_mapping,
+        model_year=model_year,
+        production_sheet=production_sheet,
+        trade_sheet=trade_sheet,
+        technology_sheet=technology_sheet,
+        countries_sheet=countries_sheet,
+        connections_sheet=connections_sheet,
+        engine=engine,
+        production_pickle=paths["production_pickle"],
+        trade_pickle=paths["trade_pickle"],
+        verbose=verbose,
+    )
+
+
 def consumption_mix_from_tyndp_pickles(
     production_pickle,
     trade_pickle,
@@ -398,6 +504,78 @@ def consumption_mix_from_tyndp_pickles(
     return consumption_mix_xr, debug
 
 
+def consumption_mix_from_tyndp_scenario(
+    scenario,
+    year,
+    climate_year,
+    data_dir,
+    technology_mapping,
+    country_mapping,
+    *,
+    download=True,
+    url_root=TYNDP_SCENARIO_URL_ROOT,
+    keep_zip=True,
+    session=None,
+    model_year=None,
+    production_sheet="Hourly Market Data emarket",
+    trade_sheet="Crossborder exchanges",
+    technology_sheet="concordance",
+    countries_sheet="countries",
+    connections_sheet="connections",
+    check=True,
+    return_debug=False,
+    engine="pyxlsb",
+    verbose=False,
+):
+    """Run the full TYNDP scenario-to-consumption-mix pipeline.
+
+    ``production_sheet`` and ``trade_sheet`` refer to sheets in the downloaded
+    TYNDP workbook. ``technology_sheet``, ``countries_sheet``, and
+    ``connections_sheet`` refer to sheets in the SHRECC/FIONA mapping workbooks.
+    """
+    Z_gross = build_z_gross_from_tyndp_scenario(
+        scenario=scenario,
+        year=year,
+        climate_year=climate_year,
+        data_dir=data_dir,
+        technology_mapping=technology_mapping,
+        country_mapping=country_mapping,
+        download=download,
+        url_root=url_root,
+        keep_zip=keep_zip,
+        session=session,
+        model_year=model_year,
+        production_sheet=production_sheet,
+        trade_sheet=trade_sheet,
+        technology_sheet=technology_sheet,
+        countries_sheet=countries_sheet,
+        connections_sheet=connections_sheet,
+        engine=engine,
+        verbose=verbose,
+    )
+
+    if not return_debug:
+        return consumption_mix_from_z_gross(
+            Z_gross,
+            check=check,
+            return_debug=False,
+            verbose=verbose,
+        )
+
+    consumption_mix_xr, debug = cast(
+        tuple[xr.DataArray, dict[str, object]],
+        consumption_mix_from_z_gross(
+            Z_gross,
+            check=check,
+            return_debug=True,
+            verbose=verbose,
+        ),
+    )
+    debug["Z_gross"] = Z_gross
+
+    return consumption_mix_xr, debug
+
+
 def consumption_mix_from_tyndp_excel(
     excel_file,
     technology_mapping,
@@ -427,11 +605,13 @@ def consumption_mix_from_tyndp_excel(
     model_year : int, default 2050
         Year used to construct the hourly datetime index from TYNDP labels.
     production_sheet : str, default "Hourly Market Data emarket"
-        Sheet containing hourly production data.
+        Sheet in the original TYNDP workbook containing hourly production data.
     trade_sheet : str, default "Crossborder exchanges"
-        Sheet containing hourly cross-border exchanges.
+        Sheet in the original TYNDP workbook containing hourly cross-border
+        exchanges.
     technology_sheet, countries_sheet, connections_sheet
-        See :func:`build_z_gross_from_tyndp_excel`.
+        Sheet names in the SHRECC/FIONA mapping workbooks. See
+        :func:`build_z_gross_from_tyndp_excel`.
     check : bool, default True
         Forwarded to :func:`consumption_mix_from_z_gross`.
     return_debug : bool, default False
@@ -483,6 +663,172 @@ def consumption_mix_from_tyndp_excel(
     debug["Z_gross"] = Z_gross
 
     return consumption_mix_xr, debug
+
+
+def tyndp_scenario_paths(
+    data_dir,
+    scenario,
+    year,
+    climate_year,
+    *,
+    url_root=TYNDP_SCENARIO_URL_ROOT,
+):
+    """Return cache paths and download URL for a TYNDP scenario combination."""
+    scenario, year, climate_year = validate_tyndp_scenario(
+        scenario,
+        year,
+        climate_year,
+    )
+    data_dir = Path(data_dir)
+    stem = f"{scenario}{year}_CY{climate_year}"
+    zip_name = f"{scenario}{year}CY{climate_year}.zip"
+
+    return {
+        "production_pickle": data_dir / f"{stem}_prod.pkl",
+        "trade_pickle": data_dir / f"{stem}_trade.pkl",
+        "workbook": data_dir
+        / f"MMStandardOutputFile_{scenario}{year}_Plexos_CY{climate_year}_v11_SoS.xlsb",
+        "zip": data_dir / zip_name,
+        "url": f"{url_root.rstrip('/')}/{zip_name}",
+    }
+
+
+def validate_tyndp_scenario(scenario, year, climate_year):
+    """Validate and normalize a TYNDP scenario tuple."""
+    scenario = str(scenario).upper()
+    year = int(year)
+    climate_year = int(climate_year)
+
+    if scenario not in TYNDP_SCENARIOS:
+        raise ValueError(
+            "Unknown TYNDP scenario "
+            f"{scenario!r}. Expected one of: {', '.join(TYNDP_SCENARIOS)}."
+        )
+    valid_years = TYNDP_SCENARIO_YEARS[scenario]
+    if year not in valid_years:
+        raise ValueError(
+            f"Unknown TYNDP scenario year {year!r} for scenario {scenario!r}. "
+            "Expected one of: "
+            + ", ".join(map(str, valid_years))
+            + "."
+        )
+    if climate_year not in TYNDP_CLIMATE_YEARS:
+        raise ValueError(
+            f"Unknown TYNDP climate year {climate_year!r}. Expected one of: "
+            + ", ".join(map(str, TYNDP_CLIMATE_YEARS))
+            + "."
+        )
+
+    return scenario, year, climate_year
+
+
+def ensure_tyndp_workbook(
+    scenario,
+    year,
+    climate_year,
+    data_dir,
+    *,
+    download=True,
+    url_root=TYNDP_SCENARIO_URL_ROOT,
+    keep_zip=True,
+    session=None,
+    verbose=False,
+):
+    """Ensure the XLSB workbook for a TYNDP scenario exists locally."""
+    paths = tyndp_scenario_paths(
+        data_dir=data_dir,
+        scenario=scenario,
+        year=year,
+        climate_year=climate_year,
+        url_root=url_root,
+    )
+
+    if paths["workbook"].exists():
+        return paths["workbook"]
+
+    if not paths["zip"].exists():
+        if not download:
+            raise FileNotFoundError(
+                "TYNDP workbook is not cached and downloading is disabled: "
+                f"{paths['workbook']}"
+            )
+        download_tyndp_scenario_zip(
+            scenario=scenario,
+            year=year,
+            climate_year=climate_year,
+            data_dir=data_dir,
+            url_root=url_root,
+            session=session,
+            verbose=verbose,
+        )
+
+    _extract_tyndp_workbook_from_zip(paths["zip"], paths["workbook"], verbose=verbose)
+
+    if not keep_zip:
+        paths["zip"].unlink(missing_ok=True)
+
+    return paths["workbook"]
+
+
+def download_tyndp_scenario_zip(
+    scenario,
+    year,
+    climate_year,
+    data_dir,
+    *,
+    url_root=TYNDP_SCENARIO_URL_ROOT,
+    session=None,
+    verbose=False,
+):
+    """Download the official TYNDP scenario zip file and return its path."""
+    paths = tyndp_scenario_paths(
+        data_dir=data_dir,
+        scenario=scenario,
+        year=year,
+        climate_year=climate_year,
+        url_root=url_root,
+    )
+    paths["zip"].parent.mkdir(parents=True, exist_ok=True)
+
+    _log(f"Downloading {paths['url']}", verbose)
+    http = session if session is not None else requests.Session()
+    response = http.get(paths["url"], stream=True, timeout=120)
+    response.raise_for_status()
+
+    with paths["zip"].open("wb") as handle:
+        for chunk in response.iter_content(chunk_size=1024 * 1024):
+            if chunk:
+                handle.write(chunk)
+
+    return paths["zip"]
+
+
+def _extract_tyndp_workbook_from_zip(zip_file, workbook, verbose=False):
+    """Extract the expected TYNDP workbook from a downloaded zip archive."""
+    zip_file = Path(zip_file)
+    workbook = Path(workbook)
+    workbook.parent.mkdir(parents=True, exist_ok=True)
+
+    _log(f"Extracting {workbook.name} from {zip_file.name}", verbose)
+    with zipfile.ZipFile(zip_file) as archive:
+        names_by_basename = {Path(name).name: name for name in archive.namelist()}
+        archive_name = names_by_basename.get(workbook.name)
+
+        if archive_name is None:
+            xlsb_files = [
+                name
+                for name in archive.namelist()
+                if Path(name).suffix.lower() == ".xlsb"
+            ]
+            if len(xlsb_files) != 1:
+                raise FileNotFoundError(
+                    f"Could not find {workbook.name!r} in {zip_file}. "
+                    f"Found XLSB files: {xlsb_files}"
+                )
+            archive_name = xlsb_files[0]
+
+        with archive.open(archive_name) as source, workbook.open("wb") as target:
+            target.write(source.read())
 
 
 def _load_pickle(filename):
@@ -820,6 +1166,7 @@ def consumption_mix_from_z_gross(
         .sort_values()
     )
     activities = A_prod.columns.get_level_values("source").unique().sort_values()
+    country_total_ordered = country_total.reindex(columns=countries, fill_value=0)
     _log(
         f"Using {len(countries)} countries and {len(activities)} technologies",
         verbose,
@@ -882,6 +1229,18 @@ def consumption_mix_from_z_gross(
 
     if check:
         _log("Checking direct shares sum to one", verbose)
+        zero_consumption = country_total_ordered.to_numpy() == 0
+        if zero_consumption.any():
+            zero_positions = np.argwhere(zero_consumption)
+            examples = [
+                f"{country_total_ordered.index[time_idx]} / {countries[country_idx]}"
+                for time_idx, country_idx in zero_positions[:10]
+            ]
+            raise ValueError(
+                "Cannot normalize direct supply shares for country-hours with "
+                "zero total consumption. First examples: "
+                + "; ".join(examples)
+            )
         np.testing.assert_allclose(direct_total, 1, atol=1e-8)
 
     # Resolve indirect trade dependencies. Since A_trade_3d is oriented as
@@ -925,6 +1284,8 @@ def consumption_mix_from_z_gross(
             "A_prod_3d": A_prod_3d,
             "A_trade_3d": A_trade_3d,
             "A_prod_expanded": A_prod_expanded,
+            "country_total": country_total,
+            "countries": countries,
             "direct_total": direct_total,
         }
 
