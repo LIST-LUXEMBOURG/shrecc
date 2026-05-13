@@ -1,5 +1,6 @@
 import zipfile
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -174,3 +175,70 @@ def test_build_z_gross_from_tyndp_scenario_uses_excel_and_saves_pickles(
     assert calls[0]["excel_file"] == paths["workbook"]
     assert calls[0]["production_pickle"] == paths["production_pickle"]
     assert calls[0]["trade_pickle"] == paths["trade_pickle"]
+
+
+def _tiny_z_gross_with_zero_consumption_hour():
+    times = pd.to_datetime(
+        [
+            "2040-01-01 00:00",
+            "2040-01-02 00:00",
+            "2040-01-03 00:00",
+            "2040-02-01 00:00",
+        ]
+    )
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("production mix", "AL", "AL", "Solar"),
+            ("production mix", "AL", "AL", "Wind"),
+            ("production mix", "ME", "ME", "Solar"),
+            ("production mix", "ME", "ME", "Wind"),
+            ("trade", "AL", "ME", "electricity"),
+            ("trade", "ME", "AL", "electricity"),
+        ],
+        names=["type", "country from", "country to", "source"],
+    )
+    return pd.DataFrame(
+        [
+            [2.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 6.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        ],
+        index=times,
+        columns=columns,
+    )
+
+
+def test_consumption_mix_zero_consumption_month_hour_average_fallback():
+    Z_gross = _tiny_z_gross_with_zero_consumption_hour()
+
+    consumption_mix, debug = tyndp.consumption_mix_from_z_gross(
+        Z_gross,
+        zero_consumption="month_hour_average",
+        return_debug=True,
+    )
+
+    imputed = consumption_mix.sel(
+        time="2040-01-03 00:00",
+        consumer_country="AL",
+        source_country="AL",
+    )
+    np.testing.assert_allclose(imputed.sel(technology="Solar"), 0.25)
+    np.testing.assert_allclose(imputed.sel(technology="Wind"), 0.75)
+    np.testing.assert_allclose(
+        consumption_mix.sel(
+            time="2040-01-03 00:00",
+            consumer_country="AL",
+        ).sum(),
+        1.0,
+    )
+
+    assert debug["zero_consumption_mask"].sum() == 1
+    assert debug["zero_consumption_imputed"].iloc[0]["fallback"] == "month_hour"
+
+
+def test_consumption_mix_zero_consumption_still_raises_by_default():
+    Z_gross = _tiny_z_gross_with_zero_consumption_hour()
+
+    with pytest.raises(ValueError, match="zero total consumption"):
+        tyndp.consumption_mix_from_z_gross(Z_gross)

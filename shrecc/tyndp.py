@@ -54,64 +54,47 @@ def build_z_gross_from_tyndp_pickles(
 ):
     """Build the gross hourly supply table from original TYNDP pickle files.
 
-    Parameters
-    ----------
-    production_pickle : str or pathlib.Path
-        Pickle file containing the hourly TYNDP production table, read from the
-        ``"Hourly Market Data emarket"`` sheet in the original workbook.
-    trade_pickle : str or pathlib.Path
-        Pickle file containing the hourly TYNDP cross-border exchange table,
-        read from the ``"Crossborder exchanges"`` sheet in the original
-        workbook.
-    technology_mapping : str or pathlib.Path
-        SHRECC/FIONA Excel workbook containing the technology concordance. The
-        function uses this file to keep only production categories that are
-        mapped in the concordance. It does not aggregate to premise activities
-        here; the resulting production technologies remain the original
-        TYNDP/ENTSO-E categories.
-    country_mapping : str or pathlib.Path
-        SHRECC/FIONA Excel workbook containing country and connection mappings.
-        Expected sheets are ``countries_sheet`` and ``connections_sheet``.
-    model_year : int, default 2050
-        Year appended to the TYNDP day/month/hour labels when constructing the
-        hourly datetime index.
-    technology_sheet : str, default "concordance"
-        Sheet name in the SHRECC/FIONA ``technology_mapping`` workbook with
-        technology/category mappings.
-    countries_sheet : str, default "countries"
-        Sheet name in the SHRECC/FIONA ``country_mapping`` workbook mapping
-        TYNDP node labels to country codes. The sheet is expected to have a
-        ``"Country code"`` column.
-    connections_sheet : str, default "connections"
-        Sheet name in the SHRECC/FIONA ``country_mapping`` workbook mapping
-        cross-border line labels to ``"Country from"`` and ``"Country to"``.
-    verbose : bool, default False
-        If True, print progress messages for the main parsing and aggregation
-        steps.
+    Args:
+        production_pickle: Pickle file containing the hourly TYNDP production
+            table, read from the ``"Hourly Market Data emarket"`` sheet in the
+            original workbook.
+        trade_pickle: Pickle file containing the hourly TYNDP cross-border
+            exchange table, read from the ``"Crossborder exchanges"`` sheet in
+            the original workbook.
+        technology_mapping: SHRECC/FIONA Excel workbook containing the
+            technology concordance. The function uses this file to keep only
+            production categories that are mapped in the concordance. It does
+            not aggregate to premise activities here; the resulting production
+            technologies remain the original TYNDP/ENTSO-E categories.
+        country_mapping: SHRECC/FIONA Excel workbook containing country and
+            connection mappings. Expected sheets are ``countries_sheet`` and
+            ``connections_sheet``.
+        model_year: Year appended to the TYNDP day/month/hour labels when
+            constructing the hourly datetime index.
+        technology_sheet: Sheet name in the SHRECC/FIONA
+            ``technology_mapping`` workbook with technology/category mappings.
+        countries_sheet: Sheet name in the SHRECC/FIONA ``country_mapping``
+            workbook mapping TYNDP node labels to country codes. The sheet is
+            expected to have a ``"Country code"`` column.
+        connections_sheet: Sheet name in the SHRECC/FIONA ``country_mapping``
+            workbook mapping cross-border line labels to ``"Country from"`` and
+            ``"Country to"``.
+        verbose: If True, print progress messages for the main parsing and
+            aggregation steps.
 
-    Returns
-    -------
-    pandas.DataFrame
+    Returns:
         Gross hourly supply table with rows indexed by time and columns indexed
         by ``("type", "country from", "country to", "source")``. The ``type``
-        level contains:
+        level contains ``"production mix"`` for domestic production by
+        technology and ``"trade"`` for positive directional imports.
 
-        - ``"production mix"``: production by country and technology, encoded
-          as domestic flows where ``country from == country to``;
-        - ``"trade"``: positive directional imports from ``country from`` to
-          ``country to`` with ``source == "trade"``.
-
-    Notes
-    -----
-    This function is the reusable version of the parsing steps in
-    ``notebooks/parsing_tyndp.ipynb``. In particular:
-
-    - production nodes such as ``XX00`` or ``XX00RETE`` are mapped to country
-      codes and aggregated;
-    - exchange columns are mapped to country pairs;
-    - negative exchanges are reversed so all trade flows are positive and
-      directional;
-    - production categories absent from the technology concordance are dropped.
+    Notes:
+        This function is the reusable version of the parsing steps in
+        ``notebooks/parsing_tyndp.ipynb``. Production nodes such as ``XX00`` or
+        ``XX00RETE`` are mapped to country codes and aggregated; exchange
+        columns are mapped to country pairs; negative exchanges are reversed so
+        all trade flows are positive and directional; and production categories
+        absent from the technology concordance are dropped.
     """
     _log("Loading TYNDP pickle files", verbose)
     production = _load_pickle(production_pickle).copy()
@@ -147,39 +130,37 @@ def build_z_gross_from_tyndp_excel(
 ):
     """Build the gross hourly supply table directly from the TYNDP workbook.
 
-    Parameters
-    ----------
-    excel_file : str or pathlib.Path
-        Original TYNDP Excel/XLSB workbook containing the hourly production and
-        cross-border exchange sheets.
-    technology_mapping, country_mapping
-        See :func:`build_z_gross_from_tyndp_pickles`.
-    model_year : int, default 2050
-        Year appended to the TYNDP day/month/hour labels when constructing the
-        hourly datetime index.
-    production_sheet : str, default "Hourly Market Data emarket"
-        Sheet in the original TYNDP workbook containing hourly production data.
-    trade_sheet : str, default "Crossborder exchanges"
-        Sheet in the original TYNDP workbook containing hourly cross-border
-        exchanges.
-    technology_sheet, countries_sheet, connections_sheet
-        Sheet names in the SHRECC/FIONA mapping workbooks. See
-        :func:`build_z_gross_from_tyndp_pickles`.
-    engine : str or None, default "pyxlsb"
-        Excel engine passed to :func:`pandas.read_excel`. The original TYNDP
-        workbook used in the notebook is ``.xlsb``, so ``"pyxlsb"`` is the
-        default. Use ``None`` to let pandas infer the engine for ordinary
-        ``.xlsx`` files.
-    production_pickle, trade_pickle : str or pathlib.Path, optional
-        If both are provided, save the raw extracted production and trade sheets
-        to these pickle files after reading the workbook. The saved files can be
-        reused with :func:`build_z_gross_from_tyndp_pickles`.
-    verbose : bool, default False
-        If True, print progress messages for reading, parsing, and aggregation.
+    Args:
+        excel_file: Original TYNDP Excel/XLSB workbook containing the hourly
+            production and cross-border exchange sheets.
+        technology_mapping: SHRECC/FIONA Excel workbook containing the
+            technology concordance.
+        country_mapping: SHRECC/FIONA Excel workbook containing country and
+            connection mappings.
+        model_year: Year appended to the TYNDP day/month/hour labels when
+            constructing the hourly datetime index.
+        production_sheet: Sheet in the original TYNDP workbook containing
+            hourly production data.
+        trade_sheet: Sheet in the original TYNDP workbook containing hourly
+            cross-border exchanges.
+        technology_sheet: Sheet name in the SHRECC/FIONA technology mapping
+            workbook.
+        countries_sheet: Sheet name in the SHRECC/FIONA country mapping
+            workbook for TYNDP node-to-country mappings.
+        connections_sheet: Sheet name in the SHRECC/FIONA country mapping
+            workbook for cross-border connection mappings.
+        engine: Excel engine passed to :func:`pandas.read_excel`. The original
+            TYNDP workbook used in the notebook is ``.xlsb``, so ``"pyxlsb"``
+            is the default. Use ``None`` to let pandas infer the engine for
+            ordinary ``.xlsx`` files.
+        production_pickle: Optional path where the raw extracted production
+            sheet should be cached.
+        trade_pickle: Optional path where the raw extracted trade sheet should
+            be cached.
+        verbose: If True, print progress messages for reading, parsing, and
+            aggregation.
 
-    Returns
-    -------
-    pandas.DataFrame
+    Returns:
         Gross hourly supply table with the same structure as
         :func:`build_z_gross_from_tyndp_pickles`.
     """
@@ -217,27 +198,27 @@ def read_tyndp_excel_tables(
 ):
     """Read raw TYNDP production and trade sheets from the workbook.
 
-    Parameters
-    ----------
-    excel_file : str or pathlib.Path
-        Original TYNDP Excel/XLSB workbook.
-    production_sheet : str, default "Hourly Market Data emarket"
-        Sheet in the original TYNDP workbook containing hourly production data.
-    trade_sheet : str, default "Crossborder exchanges"
-        Sheet in the original TYNDP workbook containing hourly cross-border
-        exchanges.
-    engine : str or None, default "pyxlsb"
-        Excel engine passed to :func:`pandas.read_excel`.
-    production_pickle, trade_pickle : str or pathlib.Path, optional
-        If both are provided, save the raw extracted sheets to these pickle
-        files.
-    verbose : bool, default False
-        If True, print progress messages.
+    Args:
+        excel_file: Original TYNDP Excel/XLSB workbook.
+        production_sheet: Sheet in the original TYNDP workbook containing
+            hourly production data.
+        trade_sheet: Sheet in the original TYNDP workbook containing hourly
+            cross-border exchanges.
+        engine: Excel engine passed to :func:`pandas.read_excel`. Use ``None``
+            to let pandas infer the engine.
+        production_pickle: Optional path where the raw extracted production
+            sheet should be cached.
+        trade_pickle: Optional path where the raw extracted trade sheet should
+            be cached.
+        verbose: If True, print progress messages.
 
-    Returns
-    -------
-    tuple[pandas.DataFrame, pandas.DataFrame]
-        Raw production and trade DataFrames as read from the workbook.
+    Returns:
+        A tuple containing the raw production and trade DataFrames as read from
+        the workbook.
+
+    Raises:
+        ValueError: If only one of ``production_pickle`` and ``trade_pickle`` is
+            provided.
     """
     _log("Reading hourly production sheet from TYNDP workbook", verbose)
     production = _read_excel_dataframe(
@@ -382,6 +363,41 @@ def build_z_gross_from_tyndp_scenario(
     ``production_sheet`` and ``trade_sheet`` refer to sheets in the downloaded
     TYNDP workbook. ``technology_sheet``, ``countries_sheet``, and
     ``connections_sheet`` refer to sheets in the SHRECC/FIONA mapping workbooks.
+
+    Args:
+        scenario: TYNDP scenario code, such as ``"DE"``, ``"GA"``, or ``"NT"``.
+        year: TYNDP scenario year.
+        climate_year: TYNDP climate year.
+        data_dir: Local cache directory for zip files, extracted workbooks, and
+            generated pickle files.
+        technology_mapping: SHRECC/FIONA Excel workbook containing the
+            technology concordance.
+        country_mapping: SHRECC/FIONA Excel workbook containing country and
+            connection mappings.
+        download: If True, download the official scenario zip when neither the
+            pickles nor workbook exist locally.
+        url_root: Base URL for official TYNDP scenario zip files.
+        keep_zip: If True, keep the downloaded zip after extracting the
+            workbook.
+        session: Optional requests-compatible session used for downloads.
+        model_year: Year used to construct hourly timestamps. Defaults to
+            ``year``.
+        production_sheet: Sheet in the TYNDP workbook containing hourly
+            production data.
+        trade_sheet: Sheet in the TYNDP workbook containing cross-border
+            exchanges.
+        technology_sheet: Sheet in the SHRECC/FIONA technology mapping
+            workbook.
+        countries_sheet: Sheet in the SHRECC/FIONA country mapping workbook
+            for TYNDP node-to-country mappings.
+        connections_sheet: Sheet in the SHRECC/FIONA country mapping workbook
+            for cross-border connection mappings.
+        engine: Excel engine passed to :func:`pandas.read_excel`.
+        verbose: If True, print progress messages.
+
+    Returns:
+        Gross hourly supply table with the same structure as
+        :func:`build_z_gross_from_tyndp_pickles`.
     """
     paths = tyndp_scenario_paths(
         data_dir=data_dir,
@@ -443,6 +459,7 @@ def consumption_mix_from_tyndp_pickles(
     model_year=2050,
     check=True,
     return_debug=False,
+    zero_consumption="raise",
     verbose=False,
 ):
     """Run the full TYNDP pickle-to-consumption-mix pipeline.
@@ -451,27 +468,30 @@ def consumption_mix_from_tyndp_pickles(
     :func:`build_z_gross_from_tyndp_pickles` and
     :func:`consumption_mix_from_z_gross`.
 
-    Parameters
-    ----------
-    production_pickle, trade_pickle, technology_mapping, country_mapping
-        See :func:`build_z_gross_from_tyndp_pickles`.
-    model_year : int, default 2050
-        Year used to construct the hourly datetime index from TYNDP labels.
-    check : bool, default True
-        Forwarded to :func:`consumption_mix_from_z_gross`.
-    return_debug : bool, default False
-        If True, return ``(consumption_mix_xr, debug)``. The debug dictionary
-        includes the constructed ``Z_gross`` table in addition to the coefficient
-        matrices returned by :func:`consumption_mix_from_z_gross`.
-    verbose : bool, default False
-        If True, print progress messages for the gross-table construction and
-        consumption-mix solve.
+    Args:
+        production_pickle: Pickle file containing the hourly TYNDP production
+            table.
+        trade_pickle: Pickle file containing the hourly TYNDP cross-border
+            exchange table.
+        technology_mapping: SHRECC/FIONA Excel workbook containing the
+            technology concordance.
+        country_mapping: SHRECC/FIONA Excel workbook containing country and
+            connection mappings.
+        model_year: Year used to construct the hourly datetime index from TYNDP
+            labels.
+        check: Forwarded to :func:`consumption_mix_from_z_gross`.
+        return_debug: If True, return ``(consumption_mix_xr, debug)``. The
+            debug dictionary includes the constructed ``Z_gross`` table in
+            addition to the coefficient matrices returned by
+            :func:`consumption_mix_from_z_gross`.
+        zero_consumption: Forwarded to :func:`consumption_mix_from_z_gross`.
+        verbose: If True, print progress messages for the gross-table
+            construction and consumption-mix solve.
 
-    Returns
-    -------
-    xarray.DataArray or tuple[xarray.DataArray, dict]
+    Returns:
         Hourly consumption mix by consuming country, producing country, and
-        technology.
+        technology. If ``return_debug`` is True, also returns a debug
+        dictionary.
     """
     Z_gross = build_z_gross_from_tyndp_pickles(
         production_pickle=production_pickle,
@@ -487,6 +507,7 @@ def consumption_mix_from_tyndp_pickles(
             Z_gross,
             check=check,
             return_debug=False,
+            zero_consumption=zero_consumption,
             verbose=verbose,
         )
 
@@ -496,6 +517,7 @@ def consumption_mix_from_tyndp_pickles(
             Z_gross,
             check=check,
             return_debug=True,
+            zero_consumption=zero_consumption,
             verbose=verbose,
         ),
     )
@@ -524,6 +546,7 @@ def consumption_mix_from_tyndp_scenario(
     connections_sheet="connections",
     check=True,
     return_debug=False,
+    zero_consumption="raise",
     engine="pyxlsb",
     verbose=False,
 ):
@@ -532,6 +555,45 @@ def consumption_mix_from_tyndp_scenario(
     ``production_sheet`` and ``trade_sheet`` refer to sheets in the downloaded
     TYNDP workbook. ``technology_sheet``, ``countries_sheet``, and
     ``connections_sheet`` refer to sheets in the SHRECC/FIONA mapping workbooks.
+
+    Args:
+        scenario: TYNDP scenario code, such as ``"DE"``, ``"GA"``, or ``"NT"``.
+        year: TYNDP scenario year.
+        climate_year: TYNDP climate year.
+        data_dir: Local cache directory for zip files, extracted workbooks, and
+            generated pickle files.
+        technology_mapping: SHRECC/FIONA Excel workbook containing the
+            technology concordance.
+        country_mapping: SHRECC/FIONA Excel workbook containing country and
+            connection mappings.
+        download: If True, download the official scenario zip when neither the
+            pickles nor workbook exist locally.
+        url_root: Base URL for official TYNDP scenario zip files.
+        keep_zip: If True, keep the downloaded zip after extracting the
+            workbook.
+        session: Optional requests-compatible session used for downloads.
+        model_year: Year used to construct hourly timestamps. Defaults to
+            ``year``.
+        production_sheet: Sheet in the TYNDP workbook containing hourly
+            production data.
+        trade_sheet: Sheet in the TYNDP workbook containing cross-border
+            exchanges.
+        technology_sheet: Sheet in the SHRECC/FIONA technology mapping
+            workbook.
+        countries_sheet: Sheet in the SHRECC/FIONA country mapping workbook
+            for TYNDP node-to-country mappings.
+        connections_sheet: Sheet in the SHRECC/FIONA country mapping workbook
+            for cross-border connection mappings.
+        check: Forwarded to :func:`consumption_mix_from_z_gross`.
+        return_debug: If True, return ``(consumption_mix_xr, debug)``.
+        zero_consumption: Forwarded to :func:`consumption_mix_from_z_gross`.
+        engine: Excel engine passed to :func:`pandas.read_excel`.
+        verbose: If True, print progress messages.
+
+    Returns:
+        Hourly consumption mix by consuming country, producing country, and
+        technology. If ``return_debug`` is True, also returns a debug
+        dictionary.
     """
     Z_gross = build_z_gross_from_tyndp_scenario(
         scenario=scenario,
@@ -559,6 +621,7 @@ def consumption_mix_from_tyndp_scenario(
             Z_gross,
             check=check,
             return_debug=False,
+            zero_consumption=zero_consumption,
             verbose=verbose,
         )
 
@@ -568,6 +631,7 @@ def consumption_mix_from_tyndp_scenario(
             Z_gross,
             check=check,
             return_debug=True,
+            zero_consumption=zero_consumption,
             verbose=verbose,
         ),
     )
@@ -588,6 +652,7 @@ def consumption_mix_from_tyndp_excel(
     connections_sheet="connections",
     check=True,
     return_debug=False,
+    zero_consumption="raise",
     engine="pyxlsb",
     verbose=False,
 ):
@@ -598,36 +663,37 @@ def consumption_mix_from_tyndp_excel(
     cross-border exchange sheets directly from the original TYNDP workbook,
     builds ``Z_gross``, and calculates the hourly consumption mix.
 
-    Parameters
-    ----------
-    excel_file, technology_mapping, country_mapping
-        See :func:`build_z_gross_from_tyndp_excel`.
-    model_year : int, default 2050
-        Year used to construct the hourly datetime index from TYNDP labels.
-    production_sheet : str, default "Hourly Market Data emarket"
-        Sheet in the original TYNDP workbook containing hourly production data.
-    trade_sheet : str, default "Crossborder exchanges"
-        Sheet in the original TYNDP workbook containing hourly cross-border
-        exchanges.
-    technology_sheet, countries_sheet, connections_sheet
-        Sheet names in the SHRECC/FIONA mapping workbooks. See
-        :func:`build_z_gross_from_tyndp_excel`.
-    check : bool, default True
-        Forwarded to :func:`consumption_mix_from_z_gross`.
-    return_debug : bool, default False
-        If True, return ``(consumption_mix_xr, debug)``. The debug dictionary
-        includes the constructed ``Z_gross`` table in addition to the coefficient
-        matrices returned by :func:`consumption_mix_from_z_gross`.
-    engine : str or None, default "pyxlsb"
-        Excel engine passed to :func:`pandas.read_excel`.
-    verbose : bool, default False
-        If True, print progress messages for reading, parsing, and solving.
+    Args:
+        excel_file: Original TYNDP Excel/XLSB workbook.
+        technology_mapping: SHRECC/FIONA Excel workbook containing the
+            technology concordance.
+        country_mapping: SHRECC/FIONA Excel workbook containing country and
+            connection mappings.
+        model_year: Year used to construct the hourly datetime index from TYNDP
+            labels.
+        production_sheet: Sheet in the original TYNDP workbook containing
+            hourly production data.
+        trade_sheet: Sheet in the original TYNDP workbook containing hourly
+            cross-border exchanges.
+        technology_sheet: Sheet in the SHRECC/FIONA technology mapping
+            workbook.
+        countries_sheet: Sheet in the SHRECC/FIONA country mapping workbook
+            for TYNDP node-to-country mappings.
+        connections_sheet: Sheet in the SHRECC/FIONA country mapping workbook
+            for cross-border connection mappings.
+        check: Forwarded to :func:`consumption_mix_from_z_gross`.
+        return_debug: If True, return ``(consumption_mix_xr, debug)``. The
+            debug dictionary includes the constructed ``Z_gross`` table.
+        zero_consumption: Forwarded to :func:`consumption_mix_from_z_gross`.
+        engine: Excel engine passed to :func:`pandas.read_excel`. Use ``None``
+            to let pandas infer the engine.
+        verbose: If True, print progress messages for reading, parsing, and
+            solving.
 
-    Returns
-    -------
-    xarray.DataArray or tuple[xarray.DataArray, dict]
+    Returns:
         Hourly consumption mix by consuming country, producing country, and
-        technology.
+        technology. If ``return_debug`` is True, also returns a debug
+        dictionary.
     """
     Z_gross = build_z_gross_from_tyndp_excel(
         excel_file=excel_file,
@@ -648,6 +714,7 @@ def consumption_mix_from_tyndp_excel(
             Z_gross,
             check=check,
             return_debug=False,
+            zero_consumption=zero_consumption,
             verbose=verbose,
         )
 
@@ -657,6 +724,7 @@ def consumption_mix_from_tyndp_excel(
             Z_gross,
             check=check,
             return_debug=True,
+            zero_consumption=zero_consumption,
             verbose=verbose,
         ),
     )
@@ -673,7 +741,23 @@ def tyndp_scenario_paths(
     *,
     url_root=TYNDP_SCENARIO_URL_ROOT,
 ):
-    """Return cache paths and download URL for a TYNDP scenario combination."""
+    """Return cache paths and download URL for a TYNDP scenario combination.
+
+    Args:
+        data_dir: Local cache directory for zip files, extracted workbooks, and
+            generated pickle files.
+        scenario: TYNDP scenario code.
+        year: TYNDP scenario year.
+        climate_year: TYNDP climate year.
+        url_root: Base URL for official TYNDP scenario zip files.
+
+    Returns:
+        Dictionary with ``production_pickle``, ``trade_pickle``, ``workbook``,
+        ``zip``, and ``url`` entries.
+
+    Raises:
+        ValueError: If the scenario tuple is not supported.
+    """
     scenario, year, climate_year = validate_tyndp_scenario(
         scenario,
         year,
@@ -694,7 +778,19 @@ def tyndp_scenario_paths(
 
 
 def validate_tyndp_scenario(scenario, year, climate_year):
-    """Validate and normalize a TYNDP scenario tuple."""
+    """Validate and normalize a TYNDP scenario tuple.
+
+    Args:
+        scenario: TYNDP scenario code.
+        year: TYNDP scenario year.
+        climate_year: TYNDP climate year.
+
+    Returns:
+        A normalized ``(scenario, year, climate_year)`` tuple.
+
+    Raises:
+        ValueError: If the scenario code, year, or climate year is unsupported.
+    """
     scenario = str(scenario).upper()
     year = int(year)
     climate_year = int(climate_year)
@@ -734,7 +830,29 @@ def ensure_tyndp_workbook(
     session=None,
     verbose=False,
 ):
-    """Ensure the XLSB workbook for a TYNDP scenario exists locally."""
+    """Ensure the XLSB workbook for a TYNDP scenario exists locally.
+
+    Args:
+        scenario: TYNDP scenario code.
+        year: TYNDP scenario year.
+        climate_year: TYNDP climate year.
+        data_dir: Local cache directory for zip files and extracted workbooks.
+        download: If True, download the official scenario zip when the workbook
+            and zip are both missing.
+        url_root: Base URL for official TYNDP scenario zip files.
+        keep_zip: If True, keep the downloaded zip after extracting the
+            workbook.
+        session: Optional requests-compatible session used for downloads.
+        verbose: If True, print progress messages.
+
+    Returns:
+        Path to the local XLSB workbook.
+
+    Raises:
+        FileNotFoundError: If the workbook is missing and downloading is
+            disabled, or if the expected workbook cannot be found in the zip.
+        ValueError: If the scenario tuple is not supported.
+    """
     paths = tyndp_scenario_paths(
         data_dir=data_dir,
         scenario=scenario,
@@ -780,7 +898,24 @@ def download_tyndp_scenario_zip(
     session=None,
     verbose=False,
 ):
-    """Download the official TYNDP scenario zip file and return its path."""
+    """Download the official TYNDP scenario zip file and return its path.
+
+    Args:
+        scenario: TYNDP scenario code.
+        year: TYNDP scenario year.
+        climate_year: TYNDP climate year.
+        data_dir: Local cache directory for the downloaded zip file.
+        url_root: Base URL for official TYNDP scenario zip files.
+        session: Optional requests-compatible session used for downloads.
+        verbose: If True, print progress messages.
+
+    Returns:
+        Path to the downloaded zip file.
+
+    Raises:
+        requests.HTTPError: If the download response has an HTTP error status.
+        ValueError: If the scenario tuple is not supported.
+    """
     paths = tyndp_scenario_paths(
         data_dir=data_dir,
         scenario=scenario,
@@ -853,6 +988,13 @@ def _read_excel_dataframe(filename, **kwargs):
     DataFrame or a dictionary of DataFrames. In this module every call reads a
     single sheet, so the runtime result is a DataFrame. The cast keeps static
     checkers such as Pylance from treating the result as a union.
+
+    Args:
+        filename: Excel file path.
+        **kwargs: Keyword arguments forwarded to :func:`pandas.read_excel`.
+
+    Returns:
+        The requested Excel sheet as a DataFrame.
     """
     read_kwargs: dict[str, Any] = dict(kwargs)
 
@@ -874,6 +1016,13 @@ def _parse_tyndp_datetime_index(index, model_year):
     The original files used in the notebook have a two-level index where the
     second level stores labels such as ``"01Jan00:00"`` without a year. If the
     pickle already contains datetimes, they are returned unchanged.
+
+    Args:
+        index: Original TYNDP index.
+        model_year: Year appended to labels that do not already contain one.
+
+    Returns:
+        Parsed datetime index.
     """
     if isinstance(index, pd.DatetimeIndex):
         return index
@@ -896,7 +1045,15 @@ def _parse_tyndp_datetime_index(index, model_year):
 
 
 def load_technology_concordance(filename, sheet_name):
-    """Read and normalize the technology concordance used to filter production."""
+    """Read and normalize the technology concordance used to filter production.
+
+    Args:
+        filename: SHRECC/FIONA technology mapping workbook.
+        sheet_name: Sheet containing the technology concordance.
+
+    Returns:
+        Normalized technology concordance DataFrame.
+    """
     concordance = _read_excel_dataframe(
         filename,
         sheet_name=sheet_name,
@@ -1045,71 +1202,68 @@ def consumption_mix_from_z_gross(
     Z_gross,
     check=True,
     return_debug=False,
+    zero_consumption="raise",
     verbose=False,
 ):
     """Calculate hourly consumption mixes from a gross supply matrix.
 
-    Parameters
-    ----------
-    Z_gross : pandas.DataFrame
-        Hourly gross electricity supply table. Rows must be hourly timestamps or
-        another time-like index. Columns must be a ``MultiIndex`` with the first
-        level named ``"type"`` and containing at least:
+    Args:
+        Z_gross: Hourly gross electricity supply table. Rows must be hourly
+            timestamps or another time-like index. Columns must be a
+            ``MultiIndex`` with the first level named ``"type"`` and containing
+            at least ``"production mix"`` for domestic production by source
+            technology and ``"trade"`` for cross-border electricity flows. The
+            remaining column levels are expected to describe the flow as
+            ``"country from"``, ``"country to"``, and ``"source"``.
+        check: If True, run conservation checks that direct domestic production
+            shares plus direct import shares sum to one, and that the final
+            consumption mix also sums to one for every hour and consuming
+            country.
+        return_debug: If True, return ``(consumption_mix_xr, debug)`` where
+            ``debug`` contains intermediate coefficient matrices and the
+            direct-total check.
+        zero_consumption: How to handle country-hours with zero total
+            consumption. ``"raise"`` keeps the strict default and raises a
+            ``ValueError``. ``"month_hour_average"`` imputes the undefined
+            final mix from the same country's nonzero-consumption hours in the
+            same month and hour of day, weighted by consumption. If no such
+            hours exist, it falls back to same hour of day and then the annual
+            country average.
+        verbose: If True, print progress messages for coefficient construction,
+            conservation checks, the matrix solve, and xarray conversion.
 
-        - ``"production mix"``: domestic production by source technology.
-        - ``"trade"``: cross-border electricity flows.
+    Returns:
+        DataArray named ``"consumption_mix"`` with dimensions ``time``,
+        ``consumer_country``, ``source_country``, and ``technology``. Values are
+        shares of each consuming country's hourly electricity consumption. If
+        ``return_debug`` is True, also returns a debug dictionary.
 
-        The remaining column levels are expected to describe the flow as
-        ``"country from"``, ``"country to"``, and ``"source"``. For production
-        columns, ``"source"`` is the production technology. For trade columns,
-        ``"source"`` is dropped and trade is aggregated to country-to-country
-        flows.
-    check : bool, default True
-        If True, run two conservation checks:
+    Notes:
+        Axis convention is the main thing to keep straight: ``A_prod_3d`` is
+        ``(time, technology, source_country)``, ``A_prod_expanded`` is
+        ``(time, technology-source_country, source_country)``, and
+        ``A_trade_3d`` is ``(time, consumer_country, source_country)``.
 
-        - direct domestic production shares plus direct import shares must sum
-          to one for every hour and consuming country;
-        - the final consumption mix must also sum to one for every hour and
-          consuming country.
+        With this convention, direct shares satisfy::
 
-        These checks are intentionally strict because most errors in this
-        workflow are axis-orientation or denominator mismatches.
-    return_debug : bool, default False
-        If True, return a tuple ``(consumption_mix_xr, debug)`` where ``debug``
-        contains intermediate coefficient matrices and the direct-total check.
-    verbose : bool, default False
-        If True, print progress messages for coefficient construction,
-        conservation checks, the matrix solve, and xarray conversion.
+            A_prod_expanded.sum(axis=1) + A_trade_3d.sum(axis=2) == 1
 
-    Returns
-    -------
-    xarray.DataArray or tuple[xarray.DataArray, dict]
-        DataArray named ``"consumption_mix"`` with dimensions:
+        The Leontief-style solve is therefore performed with ``I - A_trade_3d``
+        directly, not with its transpose.
 
-        - ``time``: copied from ``Z_gross.index``;
-        - ``consumer_country``: country where electricity is consumed;
-        - ``source_country``: country where electricity was produced;
-        - ``technology``: production technology.
-
-        Values are shares of each consuming country's hourly electricity
-        consumption. For each ``time`` and ``consumer_country``, summing over
-        ``source_country`` and ``technology`` should give one.
-
-    Notes
-    -----
-    Axis convention is the main thing to keep straight:
-
-    - ``A_prod_3d`` is ``(time, technology, source_country)``.
-    - ``A_prod_expanded`` is ``(time, technology-source_country, source_country)``.
-    - ``A_trade_3d`` is ``(time, consumer_country, source_country)``.
-
-    With this convention, direct shares satisfy::
-
-        A_prod_expanded.sum(axis=1) + A_trade_3d.sum(axis=2) == 1
-
-    The Leontief-style solve is therefore performed with ``I - A_trade_3d``
-    directly, not with its transpose.
+    Raises:
+        ValueError: If a country-hour has zero total consumption and
+            ``zero_consumption`` is ``"raise"``, or if the requested fallback
+            cannot be calculated.
+        AssertionError: If conservation checks fail.
     """
+    valid_zero_consumption = {"raise", "month_hour_average"}
+    if zero_consumption not in valid_zero_consumption:
+        raise ValueError(
+            "zero_consumption must be one of: "
+            + ", ".join(sorted(valid_zero_consumption))
+        )
+
     # Build a domestic country-to-country block from production. It gives the
     # total domestic production available for each consumer country and is used
     # only to define the denominator for direct shares.
@@ -1226,12 +1380,12 @@ def consumption_mix_from_z_gross(
     A_trade_3d = A_trade_wide.to_numpy().reshape(T, C, C)
 
     direct_total = A_prod_expanded.sum(axis=1) + A_trade_3d.sum(axis=2)
+    zero_consumption_mask = country_total_ordered.to_numpy() == 0
 
     if check:
         _log("Checking direct shares sum to one", verbose)
-        zero_consumption = country_total_ordered.to_numpy() == 0
-        if zero_consumption.any():
-            zero_positions = np.argwhere(zero_consumption)
+        if zero_consumption_mask.any() and zero_consumption == "raise":
+            zero_positions = np.argwhere(zero_consumption_mask)
             examples = [
                 f"{country_total_ordered.index[time_idx]} / {countries[country_idx]}"
                 for time_idx, country_idx in zero_positions[:10]
@@ -1241,7 +1395,11 @@ def consumption_mix_from_z_gross(
                 "zero total consumption. First examples: "
                 + "; ".join(examples)
             )
-        np.testing.assert_allclose(direct_total, 1, atol=1e-8)
+        np.testing.assert_allclose(
+            direct_total[~zero_consumption_mask],
+            1,
+            atol=1e-8,
+        )
 
     # Resolve indirect trade dependencies. Since A_trade_3d is oriented as
     # (consumer_country, source_country), solve with M directly.
@@ -1252,6 +1410,19 @@ def consumption_mix_from_z_gross(
         M,
         A_prod_expanded.transpose(0, 2, 1),
     ).transpose(0, 2, 1)
+
+    zero_consumption_imputed = None
+    if zero_consumption_mask.any() and zero_consumption == "month_hour_average":
+        _log(
+            "Imputing zero-consumption country-hours with month-hour averages",
+            verbose,
+        )
+        zero_consumption_imputed = _impute_zero_consumption_month_hour_average(
+            consumption_mix_3d,
+            country_total_ordered,
+            zero_consumption_mask,
+            countries,
+        )
 
     if check:
         _log("Checking final consumption mix sums to one", verbose)
@@ -1285,8 +1456,78 @@ def consumption_mix_from_z_gross(
             "A_trade_3d": A_trade_3d,
             "A_prod_expanded": A_prod_expanded,
             "country_total": country_total,
+            "country_total_ordered": country_total_ordered,
             "countries": countries,
             "direct_total": direct_total,
+            "zero_consumption": zero_consumption,
+            "zero_consumption_mask": zero_consumption_mask,
+            "zero_consumption_imputed": zero_consumption_imputed,
         }
 
     return consumption_mix_xr
+
+
+def _impute_zero_consumption_month_hour_average(
+    consumption_mix_3d,
+    country_total_ordered,
+    zero_consumption_mask,
+    countries,
+):
+    """Fill undefined zero-consumption mixes from weighted country averages."""
+    if not isinstance(country_total_ordered.index, pd.DatetimeIndex):
+        raise ValueError(
+            "zero_consumption='month_hour_average' requires a DatetimeIndex"
+        )
+
+    times = country_total_ordered.index
+    weights = country_total_ordered.to_numpy()
+    imputed = []
+
+    for country_idx, country in enumerate(countries):
+        zero_times = np.flatnonzero(zero_consumption_mask[:, country_idx])
+        if len(zero_times) == 0:
+            continue
+
+        country_weights = weights[:, country_idx]
+        valid = country_weights > 0
+        if not valid.any():
+            raise ValueError(
+                "Cannot impute zero-consumption mix for country "
+                f"{country}: no nonzero-consumption hours are available."
+            )
+
+        for time_idx in zero_times:
+            candidate_masks = [
+                valid
+                & (times.month == times[time_idx].month)
+                & (times.hour == times[time_idx].hour),
+                valid & (times.hour == times[time_idx].hour),
+                valid,
+            ]
+
+            for fallback_level, candidate_mask in zip(
+                ["month_hour", "hour", "annual"],
+                candidate_masks,
+            ):
+                if candidate_mask.any():
+                    mix = np.average(
+                        consumption_mix_3d[candidate_mask, :, country_idx],
+                        axis=0,
+                        weights=country_weights[candidate_mask],
+                    )
+                    consumption_mix_3d[time_idx, :, country_idx] = mix
+                    imputed.append(
+                        {
+                            "time": times[time_idx],
+                            "country": country,
+                            "fallback": fallback_level,
+                            "sample_count": int(candidate_mask.sum()),
+                            "weight_sum": float(country_weights[candidate_mask].sum()),
+                        }
+                    )
+                    break
+
+    return pd.DataFrame(
+        imputed,
+        columns=["time", "country", "fallback", "sample_count", "weight_sum"],
+    )

@@ -18,7 +18,19 @@ DEFAULT_PREMISE_IAM_MODELS = ("remind", "image", "remind-eu")
 
 
 class PremiseConsumptionMixMapper:
-    """Map SHRECC consumption mixes to premise geography and activity axes."""
+    """Map SHRECC consumption mixes to premise geography and activity axes.
+
+    Args:
+        technology_mapping: Technology concordance as a DataFrame or path to a
+            SHRECC/FIONA technology mapping workbook.
+        iam_model: premise/IAM model used for geography mapping.
+        topology_files: Optional mapping from IAM model names to premise-style
+            topology JSON files.
+        technology_sheet: Sheet name used when ``technology_mapping`` is an
+            Excel workbook.
+        on_missing_model: Behavior when a premise geography map cannot be
+            built. Must be ``"warn"``, ``"raise"``, or ``"ignore"``.
+    """
 
     def __init__(
         self,
@@ -36,7 +48,14 @@ class PremiseConsumptionMixMapper:
         self._premise_region_map = None
 
     def build_region_map(self, countries):
-        """Build and cache a source-country to premise-region map."""
+        """Build and cache a source-country to premise-region map.
+
+        Args:
+            countries: Iterable of source-country codes.
+
+        Returns:
+            DataFrame mapping country codes to premise/IAM regions.
+        """
         self._premise_region_map = build_premise_region_map(
             countries,
             iam_models=(self.iam_model,),
@@ -46,7 +65,17 @@ class PremiseConsumptionMixMapper:
         return self._premise_region_map
 
     def map_technologies(self, consumption_mix_xr, check=True):
-        """Aggregate the ``technology`` dimension to ``premise_activity``."""
+        """Aggregate the ``technology`` dimension to ``premise_activity``.
+
+        Args:
+            consumption_mix_xr: Consumption mix DataArray with a
+                ``technology`` dimension.
+            check: If True, check that mapped shares sum to one.
+
+        Returns:
+            Consumption mix DataArray with ``premise_activity`` replacing
+            ``technology``.
+        """
         return map_consumption_mix_technologies_xr(
             consumption_mix_xr,
             technology_mapping=self.technology_mapping,
@@ -62,7 +91,20 @@ class PremiseConsumptionMixMapper:
         region_dim="premise_region",
         check=True,
     ):
-        """Aggregate source countries to premise regions for this IAM model."""
+        """Aggregate source countries to premise regions for this IAM model.
+
+        Args:
+            consumption_mix_xr: Consumption mix DataArray with a source-country
+                dimension.
+            premise_region_map: Optional precomputed country-to-region map. If
+                omitted, a map is built and cached.
+            source_dim: Name of the source-country dimension.
+            region_dim: Name of the output premise-region dimension.
+            check: If True, check that mapped shares sum to one.
+
+        Returns:
+            Consumption mix DataArray aggregated to premise regions.
+        """
         if premise_region_map is None:
             if self._premise_region_map is None:
                 self.build_region_map(consumption_mix_xr[source_dim].to_index())
@@ -78,7 +120,18 @@ class PremiseConsumptionMixMapper:
         )
 
     def map_consumption_mix(self, consumption_mix_xr, check=True):
-        """Map technologies and then source countries to premise dimensions."""
+        """Map technologies and then source countries to premise dimensions.
+
+        Args:
+            consumption_mix_xr: Consumption mix DataArray with ``technology``
+                and ``source_country`` dimensions.
+            check: If True, check that mapped shares sum to one after each
+                mapping step.
+
+        Returns:
+            Consumption mix DataArray with premise activity and region
+            dimensions.
+        """
         premise_activity_mix_xr = self.map_technologies(
             consumption_mix_xr,
             check=check,
@@ -95,7 +148,24 @@ def build_premise_region_map(
     topology_files=None,
     on_missing_model="warn",
 ):
-    """Map country codes to premise/IAM regions for one or more IAM models."""
+    """Map country codes to premise/IAM regions for one or more IAM models.
+
+    Args:
+        countries: Iterable of country codes to map.
+        iam_models: IAM model names to include as output columns.
+        topology_files: Optional mapping from IAM model names to premise-style
+            topology JSON files.
+        on_missing_model: Behavior when a premise geography map cannot be
+            built. Must be ``"warn"``, ``"raise"``, or ``"ignore"``.
+
+    Returns:
+        DataFrame indexed by country code with one column per IAM model.
+
+    Raises:
+        ValueError: If ``on_missing_model`` is not supported.
+        FileNotFoundError: If a geography map is missing and
+            ``on_missing_model`` is ``"raise"``.
+    """
     if on_missing_model not in {"warn", "raise", "ignore"}:
         raise ValueError("on_missing_model must be 'warn', 'raise', or 'ignore'")
 
@@ -142,7 +212,26 @@ def map_consumption_mix_technologies_xr(
     technology_sheet="concordance",
     check=True,
 ):
-    """Map consumption-mix technologies while keeping the result as xarray."""
+    """Map consumption-mix technologies while keeping the result as xarray.
+
+    Args:
+        consumption_mix_xr: Consumption mix DataArray with a ``technology``
+            dimension.
+        technology_mapping: Technology concordance as a DataFrame or path to a
+            SHRECC/FIONA technology mapping workbook.
+        technology_sheet: Sheet name used when ``technology_mapping`` is an
+            Excel workbook.
+        check: If True, check that mapped shares sum to one.
+
+    Returns:
+        Consumption mix DataArray with ``premise_activity`` replacing
+        ``technology``.
+
+    Raises:
+        ValueError: If the input lacks a ``technology`` dimension or if any
+            technology is missing from the mapping.
+        AssertionError: If conservation checks fail.
+    """
     if "technology" not in consumption_mix_xr.dims:
         raise ValueError("consumption_mix_xr must have a 'technology' dimension")
 
@@ -203,7 +292,26 @@ def map_consumption_mix_regions_xr(
     region_dim="premise_region",
     check=True,
 ):
-    """Map source countries to premise/IAM regions while keeping xarray output."""
+    """Map source countries to premise/IAM regions while keeping xarray output.
+
+    Args:
+        consumption_mix_xr: Consumption mix DataArray with a source-country
+            dimension.
+        premise_region_map: DataFrame indexed by source country with IAM model
+            columns.
+        iam_model: Column in ``premise_region_map`` used for mapping.
+        source_dim: Name of the source-country dimension.
+        region_dim: Name of the output premise-region dimension.
+        check: If True, check that mapped shares sum to one.
+
+    Returns:
+        Consumption mix DataArray aggregated to premise/IAM regions.
+
+    Raises:
+        ValueError: If the source dimension, IAM model column, source-country
+            rows, or region values are missing.
+        AssertionError: If conservation checks fail.
+    """
     if source_dim not in consumption_mix_xr.dims:
         raise ValueError(f"consumption_mix_xr must have a {source_dim!r} dimension")
 
@@ -270,7 +378,16 @@ def map_consumption_mix_regions_xr(
 
 
 def _map_countries_with_topology_file(countries, topology_file):
-    """Map countries using a premise-style topology JSON file."""
+    """Map countries using a premise-style topology JSON file.
+
+    Args:
+        countries: Iterable of country codes.
+        topology_file: Path to a premise-style topology JSON file.
+
+    Returns:
+        List of mapped regions, with missing countries represented as
+        ``pandas.NA``.
+    """
     with Path(topology_file).open(encoding="utf-8") as handle:
         topology = json.load(handle)
 
