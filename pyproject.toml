@@ -47,6 +47,7 @@ dependencies = [
    "xarray",
    "pyxlsb",
    "pytest>=9.0.3",
+   "python-calamine>=0.6.2",
 ]
 license="MIT"
 license-files = ["LICENSE"]
