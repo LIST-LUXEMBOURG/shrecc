@@ -1,2 +1,3 @@
 include shrecc/data/*csv
 include shrecc/data/*json
+include shrecc/data/*xlsx
