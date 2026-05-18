@@ -145,7 +145,6 @@ class PremiseConsumptionMixMapper:
 def build_premise_region_map(
     countries,
     iam_models=DEFAULT_PREMISE_IAM_MODELS,
-    topology_files=None,
     on_missing_model="warn",
 ):
     """Map country codes to premise/IAM regions for one or more IAM models.
@@ -171,19 +170,10 @@ def build_premise_region_map(
 
     from premise.geomap import Geomap
 
-    topology_files = topology_files or {}
     country_index = pd.Index(list(countries), name="country").unique().sort_values()
     region_map = pd.DataFrame(index=country_index)
 
     for model in iam_models:
-        topology_file = topology_files.get(model)
-
-        if topology_file is not None:
-            region_map[model] = _map_countries_with_topology_file(
-                country_index,
-                topology_file,
-            )
-            continue
 
         try:
             geomap = Geomap(model)
