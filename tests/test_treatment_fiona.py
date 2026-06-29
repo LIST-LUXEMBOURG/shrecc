@@ -4,9 +4,98 @@ import xarray as xr
 
 from shrecc.premise_mapping import (
     PremiseConsumptionMixMapper,
+    build_country_activity_technology_map,
     map_consumption_mix_regions_xr,
     map_consumption_mix_technologies_xr,
 )
+
+
+def test_build_country_activity_technology_map_uses_market_shares_and_unique_fallback():
+    concordance = pd.DataFrame(
+        {
+            "wind": [1, 1, 0],
+            "gas with CCS": [0, 0, 1],
+        },
+        index=pd.Index(
+            ["wind small", "wind large", "new gas CCS"],
+            name="premise_activity",
+        ),
+    )
+    activity_shares = pd.DataFrame(
+        {
+            "FR": [0.1, 0.3],
+            "DE": [0.4, 0.1],
+        },
+        index=["wind small", "wind large"],
+    )
+
+    result = build_country_activity_technology_map(concordance, activity_shares)
+
+    np.testing.assert_allclose(
+        result.loc[
+            ["wind small", "wind large"],
+            [("FR", "wind"), ("DE", "wind")],
+        ],
+        [[0.25, 0.8], [0.75, 0.2]],
+    )
+    assert result.loc["new gas CCS", ("FR", "gas with CCS")] == 1
+    assert result.loc["new gas CCS", ("DE", "gas with CCS")] == 1
+    np.testing.assert_allclose(result.sum(axis=0), 1)
+
+
+def test_build_country_activity_technology_map_rejects_ambiguous_zero_shares():
+    concordance = pd.DataFrame(
+        {"new technology": [1, 1]},
+        index=["new activity A", "new activity B"],
+    )
+    activity_shares = pd.DataFrame({"FR": []})
+
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "FR / new technology",
+    ):
+        build_country_activity_technology_map(concordance, activity_shares)
+
+
+def test_map_consumption_mix_technologies_xr_uses_country_specific_weights():
+    consumption_mix_xr = xr.DataArray(
+        np.array([[[[0.5], [0.5]]]]),
+        dims=("time", "consumer_country", "source_country", "technology"),
+        coords={
+            "time": pd.to_datetime(["2050-01-01 00:00"]),
+            "consumer_country": ["LU"],
+            "source_country": ["FR", "DE"],
+            "technology": ["wind"],
+        },
+        name="consumption_mix",
+    )
+    tech_map = pd.DataFrame(
+        {
+            ("FR", "wind"): [0.25, 0.75],
+            ("DE", "wind"): [0.8, 0.2],
+        },
+        index=pd.Index(["wind small", "wind large"], name="premise_activity"),
+    )
+    tech_map.columns.names = ["source_country", "technology"]
+
+    mapped = map_consumption_mix_technologies_xr(
+        consumption_mix_xr,
+        tech_map,
+        check=True,
+    )
+
+    expected = xr.DataArray(
+        np.array([[[[0.125, 0.375], [0.4, 0.1]]]]),
+        dims=("time", "consumer_country", "source_country", "premise_activity"),
+        coords={
+            "time": consumption_mix_xr.time,
+            "consumer_country": ["LU"],
+            "source_country": ["FR", "DE"],
+            "premise_activity": ["wind small", "wind large"],
+        },
+        name="consumption_mix",
+    )
+    xr.testing.assert_allclose(mapped, expected)
 
 
 def test_map_consumption_mix_technologies_xr_multiplies_technology_axis():

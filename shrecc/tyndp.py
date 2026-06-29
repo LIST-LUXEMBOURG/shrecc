@@ -1473,7 +1473,13 @@ def _impute_zero_consumption_month_hour_average(
     zero_consumption_mask,
     countries,
 ):
-    """Fill undefined zero-consumption mixes from weighted country averages."""
+    """
+    Fill undefined zero-consumption mixes from weighted country averages.
+    This happens for hours with zero total consumption and zero supply.
+    The strategy is to impute the missing mix from the same country's
+    nonzero-consumption hours in the same month and hour of day
+    """
+    
     if not isinstance(country_total_ordered.index, pd.DatetimeIndex):
         raise ValueError(
             "zero_consumption='month_hour_average' requires a DatetimeIndex"
@@ -1531,3 +1537,4 @@ def _impute_zero_consumption_month_hour_average(
         imputed,
         columns=["time", "country", "fallback", "sample_count", "weight_sum"],
     )
+

@@ -9,6 +9,7 @@ from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
 from zoneinfo import ZoneInfo  # Only available in Python 3.9+
+from tqdm import tqdm
 
 import appdirs
 import pandas as pd
@@ -16,8 +17,12 @@ import requests
 
 from shrecc.treatment import load_from_pickle, save_to_pickle
 
+API_REQUEST_TIMEOUT = 20
 
-def get_prod(start, end, country, cumul=False, rolling=False):
+
+def get_prod(
+    start, end, country, cumul=False, rolling=False, timeout=API_REQUEST_TIMEOUT
+):
     """
     Downloads production data from the Energy Charts API. Gets called from `get_data()`.
 
@@ -27,6 +32,7 @@ def get_prod(start, end, country, cumul=False, rolling=False):
         country (list of str): The country for which data needs to be downloaded.
         cumul (bool): If True, calculate the cumulative sum of production.
         rolling (bool): If True, calculate the rolling average of production.
+        timeout (int): The request timeout in seconds.
 
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame, np.ndarray]: A tuple containing:
@@ -36,8 +42,10 @@ def get_prod(start, end, country, cumul=False, rolling=False):
     """
     s = requests.Session()
     url = f"https://api.energy-charts.info/public_power?country={country}&start={start}&end={end}"
-    r = s.get(url)
-    s.close()
+    try:
+        r = s.get(url, timeout=timeout)
+    finally:
+        s.close()
     r.raise_for_status()
     response = json.loads(r.text)
     techs = []
@@ -68,11 +76,11 @@ def get_prod(start, end, country, cumul=False, rolling=False):
     except Exception as e:
         print(e)
         load_df = None
-    print("...production for " + country + " OK.")
+    print(f"...production for {country} OK.")
     return prod_df, load_df, techs
 
 
-def get_trade(start, end, country):
+def get_trade(start, end, country, timeout=API_REQUEST_TIMEOUT):
     """
     Downloads trade data from the Energy Charts API. Gets called from `get_data()`.
     Uses the "cbpf" endpoint of the API.
@@ -81,6 +89,7 @@ def get_trade(start, end, country):
         start (int): Start of the download period (output of `year_to_unix()`) in unix seconds.
         end (int): End of the download period (output of `year_to_unix()`) in unix seconds.
         country (list of str): The country for which data needs to be downloaded.
+        timeout (int): The request timeout in seconds.
 
     Returns:
         Tuple[pd.DataFrame, np.ndarray]: A tuple containing:
@@ -91,8 +100,10 @@ def get_trade(start, end, country):
     url = (
         f"https://api.energy-charts.info/cbpf?country={country}&start={start}&end={end}"
     )
-    r = s.get(url)
-    s.close()
+    try:
+        r = s.get(url, timeout=timeout)
+    finally:
+        s.close()
     r.raise_for_status()
     response = json.loads(r.text)
     ticks = [
@@ -109,7 +120,13 @@ def get_trade(start, end, country):
     return trade_df, regions
 
 
-def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
+def get_data(
+    year,
+    path_to_data=None,
+    max_retries=3,
+    retry_delay=5,
+    request_timeout=API_REQUEST_TIMEOUT,
+):
     """
     Main function for downloading data.
 
@@ -118,6 +135,7 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
         path_to_data (str or Path): location of the data.
         max_retries (int): The maximum number of retries for each country download in case of problems.
         retry_delay (int): The delay in seconds between retries.
+        request_timeout (int): The request timeout in seconds.
 
     Returns:
         pd.DataFrame: A dataframe containing both production and trade data for all countries in the selected year.
@@ -181,19 +199,27 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
         print("API data loaded successfully.")
     else:
         data = {}
-        for country in ALL_COUNTRIES:
+        for country in (pbar := tqdm(ALL_COUNTRIES)):
+            pbar.set_description(f"Fetching data for country {country}")
             country = country.lower()
-            print(country)
             for attempt in range(max_retries):
                 try:
                     prod_df, load_df, _ = get_prod(
-                        start=start, end=end, country=country, cumul=False, rolling=1
+                        start=start,
+                        end=end,
+                        country=country,
+                        cumul=False,
+                        rolling=1,
+                        timeout=request_timeout,
                     )
+
+                    time.sleep(1)
 
                     trade_df, _ = get_trade(
                         start=start,
                         end=end,
                         country=country,
+                        timeout=request_timeout,
                     )
 
                     data[country] = {
@@ -203,11 +229,22 @@ def get_data(year, path_to_data=None, max_retries=3, retry_delay=5):
                     }
                     break
                 except requests.HTTPError as e:
-                    if e.response.status_code == 404 or e.response.status_code == 400:
+                    if e.response.status_code in [400, 404]:
                         print(f"\t{e.response.status_code} error for {country}: {e}")
                         print(f"\tResponse text: {e.response.text}")
                         time.sleep(retry_delay)
                         break  # Break out of retry loop, continue to next country
+                    elif e.response.status_code in [429, 504]:
+                        print(
+                            f"\t{e.response.status_code} error for {country}: {e}, "
+                            f"retrying {attempt + 1}/{max_retries}..."
+                        )
+                        time.sleep(retry_delay)
+                    else:
+                        break
+                except requests.Timeout as e:
+                    print(f"\tTimeout for {country}: {e}")
+                    break
                 except requests.ConnectionError as e:
                     print(
                         f"Network error: {e}, retrying {attempt + 1}/{max_retries}..."
@@ -236,7 +273,9 @@ def year_to_unix(year):
             - The end of the year in Unix seconds (UTC).
     """
     start_of_year = datetime(year, 1, 1, 0, 0, tzinfo=ZoneInfo("UTC"))
-    end_of_year = datetime(year, 12, 31, 23, 59, 59, tzinfo=ZoneInfo("UTC"))  # include full last second
+    end_of_year = datetime(
+        year, 12, 31, 23, 59, 59, tzinfo=ZoneInfo("UTC")
+    )  # include full last second
     start_unix = int(start_of_year.timestamp())
     end_unix = int(end_of_year.timestamp())
     return start_unix, end_unix
@@ -260,7 +299,7 @@ def cleaning_data(data, data_dir):
         try:
             techs.extend(datasets["production mix"].columns)
             partners.extend(datasets["trade"].columns)
-        except: # noqa E722
+        except:  # noqa E722
             pass
     filename = data_dir / "generation_units_by_country.csv"
     if filename.exists():

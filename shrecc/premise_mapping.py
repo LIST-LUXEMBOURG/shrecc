@@ -17,6 +17,109 @@ except ImportError:
 DEFAULT_PREMISE_IAM_MODELS = ("remind", "image", "remind-eu")
 
 
+def build_country_activity_technology_map(
+    activity_concordance,
+    country_activity_shares,
+):
+    """Build country-specific ENTSO-E-to-activity allocation shares.
+
+    The detailed activity concordance identifies activities compatible with
+    each ENTSO-E technology. Within each country, compatible activities are
+    weighted by their contribution to the country's electricity market and
+    then normalized. A technology with exactly one compatible activity is
+    allocated fully to that activity even when it is absent from the supplied
+    market shares, which supports one-to-one premise-added technologies.
+
+    Args:
+        activity_concordance: DataFrame indexed by activity and with ENTSO-E
+            technologies as columns. Positive values indicate compatibility.
+        country_activity_shares: DataFrame indexed by activity and with source
+            countries as columns. Values are resolved electricity-market
+            contributions and do not need to be normalized.
+
+    Returns:
+        DataFrame indexed by premise activity. Columns are a MultiIndex of
+        ``source_country`` and ``technology``.
+
+    Raises:
+        ValueError: If inputs contain negative values, have duplicate labels,
+            or a country/technology with multiple compatible activities has no
+            positive market shares.
+    """
+    activity_concordance = activity_concordance.copy()
+    country_activity_shares = country_activity_shares.copy()
+
+    _validate_activity_share_builder_input(
+        activity_concordance,
+        country_activity_shares,
+    )
+
+    activity_concordance = activity_concordance.fillna(0).gt(0).astype(float)
+    country_activity_shares = country_activity_shares.fillna(0).reindex(
+        activity_concordance.index,
+        fill_value=0,
+    )
+
+    country_maps = {}
+    unresolved = []
+
+    for country in country_activity_shares.columns:
+        weighted = activity_concordance.mul(
+            country_activity_shares[country],
+            axis=0,
+        )
+        totals = weighted.sum(axis=0)
+
+        for technology in totals.index[totals.eq(0)]:
+            matches = activity_concordance.index[
+                activity_concordance[technology].gt(0)
+            ]
+            if len(matches) == 1:
+                weighted.loc[matches[0], technology] = 1
+                totals.loc[technology] = 1
+            elif len(matches) > 1:
+                unresolved.append((country, technology))
+
+        country_maps[country] = weighted.div(totals.replace(0, np.nan), axis=1)
+
+    if unresolved:
+        examples = "; ".join(
+            f"{country} / {technology}" for country, technology in unresolved[:10]
+        )
+        raise ValueError(
+            "Cannot allocate technologies with multiple compatible activities "
+            "and zero country activity shares. First examples: "
+            + examples
+        )
+
+    result = pd.concat(country_maps, axis=1, names=["source_country", "technology"])
+    result.index.name = activity_concordance.index.name or "premise_activity"
+    return result.fillna(0)
+
+
+def _validate_activity_share_builder_input(
+    activity_concordance,
+    country_activity_shares,
+):
+    """Validate inputs to ``build_country_activity_technology_map``."""
+    if not isinstance(activity_concordance, pd.DataFrame):
+        raise TypeError("activity_concordance must be a pandas DataFrame")
+    if not isinstance(country_activity_shares, pd.DataFrame):
+        raise TypeError("country_activity_shares must be a pandas DataFrame")
+    if activity_concordance.index.has_duplicates:
+        raise ValueError("activity_concordance activity labels must be unique")
+    if activity_concordance.columns.has_duplicates:
+        raise ValueError("activity_concordance technology labels must be unique")
+    if country_activity_shares.index.has_duplicates:
+        raise ValueError("country_activity_shares activity labels must be unique")
+    if country_activity_shares.columns.has_duplicates:
+        raise ValueError("country_activity_shares country labels must be unique")
+    if activity_concordance.fillna(0).lt(0).to_numpy().any():
+        raise ValueError("activity_concordance cannot contain negative values")
+    if country_activity_shares.fillna(0).lt(0).to_numpy().any():
+        raise ValueError("country_activity_shares cannot contain negative values")
+
+
 class PremiseConsumptionMixMapper:
     """Map SHRECC consumption mixes to premise geography and activity axes.
 
@@ -234,26 +337,31 @@ def map_consumption_mix_technologies_xr(
         )
 
     technologies = consumption_mix_xr["technology"].to_index()
-    missing_technologies = technologies.difference(tech_map.columns)
 
-    if not missing_technologies.empty:
-        raise ValueError(
-            "No premise technology mapping found for: "
-            + ", ".join(map(str, missing_technologies.tolist()))
+    if isinstance(tech_map.columns, pd.MultiIndex):
+        weights = _country_specific_technology_weights(
+            tech_map,
+            consumption_mix_xr,
+            technologies,
         )
-
-    tech_map = tech_map.reindex(columns=technologies)
-    tech_map.index.name = "premise_activity"
-
-    weights = xr.DataArray(
-        tech_map.T.to_numpy(),
-        dims=("technology", "premise_activity"),
-        coords={
-            "technology": technologies,
-            "premise_activity": tech_map.index,
-        },
-        name="technology_weight",
-    )
+    else:
+        missing_technologies = technologies.difference(tech_map.columns)
+        if not missing_technologies.empty:
+            raise ValueError(
+                "No premise technology mapping found for: "
+                + ", ".join(map(str, missing_technologies.tolist()))
+            )
+        tech_map = tech_map.reindex(columns=technologies)
+        tech_map.index.name = "premise_activity"
+        weights = xr.DataArray(
+            tech_map.T.to_numpy(),
+            dims=("technology", "premise_activity"),
+            coords={
+                "technology": technologies,
+                "premise_activity": tech_map.index,
+            },
+            name="technology_weight",
+        )
 
     mapped = xr.dot(consumption_mix_xr, weights, dim="technology")
     mapped = mapped.rename("consumption_mix")
@@ -272,6 +380,65 @@ def map_consumption_mix_technologies_xr(
         np.testing.assert_allclose(totals.to_numpy(), 1, atol=1e-8)
 
     return mapped
+
+
+def _country_specific_technology_weights(
+    tech_map,
+    consumption_mix_xr,
+    technologies,
+):
+    """Convert a country-specific technology map to aligned xarray weights."""
+    required_levels = {"source_country", "technology"}
+    if not required_levels.issubset(tech_map.columns.names):
+        raise ValueError(
+            "Country-specific technology mapping columns must have "
+            "'source_country' and 'technology' levels"
+        )
+    if "source_country" not in consumption_mix_xr.dims:
+        raise ValueError(
+            "consumption_mix_xr must have a 'source_country' dimension when "
+            "using a country-specific technology mapping"
+        )
+
+    source_countries = consumption_mix_xr["source_country"].to_index()
+    mapped_countries = tech_map.columns.get_level_values("source_country")
+    mapped_technologies = tech_map.columns.get_level_values("technology")
+    missing_countries = source_countries.difference(mapped_countries)
+    missing_technologies = technologies.difference(mapped_technologies)
+
+    if not missing_countries.empty:
+        raise ValueError(
+            "No country-specific technology mapping found for source countries: "
+            + ", ".join(map(str, missing_countries.tolist()))
+        )
+    if not missing_technologies.empty:
+        raise ValueError(
+            "No premise technology mapping found for: "
+            + ", ".join(map(str, missing_technologies.tolist()))
+        )
+
+    ordered_columns = pd.MultiIndex.from_product(
+        [source_countries, technologies],
+        names=["source_country", "technology"],
+    )
+    tech_map = tech_map.reindex(columns=ordered_columns)
+    tech_map.index.name = "premise_activity"
+
+    values = tech_map.to_numpy().reshape(
+        len(tech_map.index),
+        len(source_countries),
+        len(technologies),
+    )
+    return xr.DataArray(
+        values.transpose(1, 2, 0),
+        dims=("source_country", "technology", "premise_activity"),
+        coords={
+            "source_country": source_countries,
+            "technology": technologies,
+            "premise_activity": tech_map.index,
+        },
+        name="technology_weight",
+    )
 
 
 def map_consumption_mix_regions_xr(
