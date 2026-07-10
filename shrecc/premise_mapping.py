@@ -385,7 +385,13 @@ def build_premise_region_map(
     if on_missing_model not in {"warn", "raise", "ignore"}:
         raise ValueError("on_missing_model must be 'warn', 'raise', or 'ignore'")
 
-    from premise.geomap import Geomap
+    try:
+        from premise.geomap import Geomap
+    except ImportError as exc:
+        raise ImportError(
+            "build_premise_region_map requires the optional 'premise' dependency. "
+            "Install it with `pip install shrecc[premise]`."
+        ) from exc
 
     country_index = pd.Index(list(countries), name="country").unique().sort_values()
     region_map = pd.DataFrame(index=country_index)
