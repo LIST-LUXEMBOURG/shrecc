@@ -1,10 +1,13 @@
 import numpy as np
 import pandas as pd
+import pandas.testing as pdt
 import xarray as xr
 
 from shrecc.premise_mapping import (
     PremiseConsumptionMixMapper,
     build_country_activity_technology_map,
+    build_country_activity_shares_from_ecoinvent_mapping,
+    build_country_specific_premise_technology_map,
     map_consumption_mix_regions_xr,
     map_consumption_mix_technologies_xr,
 )
@@ -55,6 +58,125 @@ def test_build_country_activity_technology_map_rejects_ambiguous_zero_shares():
         "FR / new technology",
     ):
         build_country_activity_technology_map(concordance, activity_shares)
+
+
+def test_build_country_activity_technology_map_can_fallback_to_concordance():
+    concordance = pd.DataFrame(
+        {"wind": [0.25, 0.75]},
+        index=pd.Index(["wind small", "wind large"], name="premise_activity"),
+    )
+    activity_shares = pd.DataFrame(
+        {"FR": [0.1, 0.3], "DE": [0.0, 0.0]},
+        index=["wind small", "wind large"],
+    )
+
+    result = build_country_activity_technology_map(
+        concordance,
+        activity_shares,
+        fallback_activity_concordance=True,
+    )
+
+    np.testing.assert_allclose(
+        result.loc[["wind small", "wind large"], ("FR", "wind")],
+        [0.25, 0.75],
+    )
+    np.testing.assert_allclose(
+        result.loc[["wind small", "wind large"], ("DE", "wind")],
+        [0.25, 0.75],
+    )
+
+
+def test_build_country_activity_shares_from_ecoinvent_mapping_collapses_mapping():
+    index = pd.MultiIndex.from_tuples(
+        [
+            ("FR", "wind small", "electricity", "kWh"),
+            ("FR", "wind large", "electricity", "kWh"),
+            ("DE", "wind small", "electricity", "kWh"),
+        ],
+        names=["geography_source", "activityName", "product", "unitName"],
+    )
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("FR", "Wind Onshore"),
+            ("FR", "Wind Offshore"),
+            ("DE", "Wind Onshore"),
+        ],
+    )
+    ecoinvent_mapping = pd.DataFrame(
+        [
+            [0.2, 0.1, 0.4],
+            [0.8, 0.3, 0.0],
+            [0.0, 0.0, 0.6],
+        ],
+        index=index,
+        columns=columns,
+    )
+
+    shares = build_country_activity_shares_from_ecoinvent_mapping(
+        ecoinvent_mapping,
+        premise_activities=["wind small", "wind large", "new activity"],
+    )
+
+    expected = pd.DataFrame(
+        {
+            "DE": [1.0, 0.0, 0.0],
+            "FR": [0.3, 1.1, 0.0],
+        },
+        index=pd.Index(
+            ["wind small", "wind large", "new activity"],
+            name="premise_activity",
+        ),
+    )
+    pdt.assert_frame_equal(shares, expected)
+
+
+def test_build_country_specific_premise_technology_map_uses_ecoinvent_shares():
+    technology_mapping = pd.DataFrame(
+        {
+            "wind": [0.5, 0.5],
+            "future ccs": [0.25, 0.75],
+        },
+        index=pd.Index(["wind small", "wind large"], name="premise_activity"),
+    )
+    index = pd.MultiIndex.from_tuples(
+        [
+            ("FR", "wind small", "electricity", "kWh"),
+            ("FR", "wind large", "electricity", "kWh"),
+        ],
+        names=["geography_source", "activityName", "product", "unitName"],
+    )
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("FR", "Wind Onshore"),
+            ("DE", "Wind Onshore"),
+        ],
+    )
+    ecoinvent_mapping = pd.DataFrame(
+        [
+            [0.1, 0.0],
+            [0.3, 0.0],
+        ],
+        index=index,
+        columns=columns,
+    )
+
+    result = build_country_specific_premise_technology_map(
+        technology_mapping,
+        ecoinvent_mapping,
+    )
+
+    np.testing.assert_allclose(
+        result.loc[["wind small", "wind large"], ("FR", "wind")],
+        [0.25, 0.75],
+    )
+    np.testing.assert_allclose(
+        result.loc[["wind small", "wind large"], ("DE", "wind")],
+        [0.5, 0.5],
+    )
+    np.testing.assert_allclose(
+        result.loc[["wind small", "wind large"], ("FR", "future ccs")],
+        [0.25, 0.75],
+    )
 
 
 def test_map_consumption_mix_technologies_xr_uses_country_specific_weights():

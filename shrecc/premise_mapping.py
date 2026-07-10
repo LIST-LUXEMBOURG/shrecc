@@ -20,6 +20,7 @@ DEFAULT_PREMISE_IAM_MODELS = ("remind", "image", "remind-eu")
 def build_country_activity_technology_map(
     activity_concordance,
     country_activity_shares,
+    fallback_activity_concordance=False,
 ):
     """Build country-specific ENTSO-E-to-activity allocation shares.
 
@@ -36,6 +37,9 @@ def build_country_activity_technology_map(
         country_activity_shares: DataFrame indexed by activity and with source
             countries as columns. Values are resolved electricity-market
             contributions and do not need to be normalized.
+        fallback_activity_concordance: If True, use the normalized input
+            concordance weights when a country/technology has multiple
+            compatible activities but no positive market shares.
 
     Returns:
         DataFrame indexed by premise activity. Columns are a MultiIndex of
@@ -54,6 +58,11 @@ def build_country_activity_technology_map(
         country_activity_shares,
     )
 
+    fallback_concordance = activity_concordance.fillna(0).clip(lower=0).astype(float)
+    fallback_concordance = fallback_concordance.div(
+        fallback_concordance.sum(axis=0).replace(0, np.nan),
+        axis=1,
+    ).fillna(0)
     activity_concordance = activity_concordance.fillna(0).gt(0).astype(float)
     country_activity_shares = country_activity_shares.fillna(0).reindex(
         activity_concordance.index,
@@ -78,7 +87,14 @@ def build_country_activity_technology_map(
                 weighted.loc[matches[0], technology] = 1
                 totals.loc[technology] = 1
             elif len(matches) > 1:
-                unresolved.append((country, technology))
+                if fallback_activity_concordance:
+                    weighted.loc[matches, technology] = fallback_concordance.loc[
+                        matches,
+                        technology,
+                    ]
+                    totals.loc[technology] = 1
+                else:
+                    unresolved.append((country, technology))
 
         country_maps[country] = weighted.div(totals.replace(0, np.nan), axis=1)
 
@@ -95,6 +111,104 @@ def build_country_activity_technology_map(
     result = pd.concat(country_maps, axis=1, names=["source_country", "technology"])
     result.index.name = activity_concordance.index.name or "premise_activity"
     return result.fillna(0)
+
+
+def build_country_activity_shares_from_ecoinvent_mapping(
+    ecoinvent_mapping,
+    premise_activities=None,
+):
+    """Collapse the basic SHRECC ecoinvent mapping to activity-country shares.
+
+    Args:
+        ecoinvent_mapping: Either the ``el_map_all_norm.csv`` DataFrame or a
+            path to that CSV. Rows must include an ``"activityName"`` level and
+            columns must be a MultiIndex whose first level is country.
+        premise_activities: Optional activity index used to align the result
+            to a premise concordance.
+
+    Returns:
+        DataFrame indexed by activity and with source countries as columns.
+        Values are not normalized; only their relative magnitude within each
+        country and compatible technology is used downstream.
+    """
+    if isinstance(ecoinvent_mapping, pd.DataFrame):
+        mapping = ecoinvent_mapping.copy()
+    else:
+        mapping = pd.read_csv(
+            ecoinvent_mapping,
+            index_col=[0, 1, 2, 3],
+            header=[0, 1],
+        )
+
+    if not isinstance(mapping.index, pd.MultiIndex):
+        raise ValueError("ecoinvent_mapping rows must use a MultiIndex")
+    if "activityName" not in mapping.index.names:
+        raise ValueError("ecoinvent_mapping index must include 'activityName'")
+    if not isinstance(mapping.columns, pd.MultiIndex):
+        raise ValueError("ecoinvent_mapping columns must use a MultiIndex")
+
+    country_activity_shares = (
+        mapping.T.groupby(level=0).sum().T.groupby(level="activityName").sum()
+    )
+    country_activity_shares.index.name = "premise_activity"
+
+    if premise_activities is not None:
+        country_activity_shares = country_activity_shares.reindex(
+            premise_activities,
+            fill_value=0,
+        )
+        country_activity_shares.index.name = "premise_activity"
+
+    return country_activity_shares
+
+
+def build_country_specific_premise_technology_map(
+    technology_mapping,
+    ecoinvent_mapping,
+    technology_sheet="concordance",
+    fallback_activity_concordance=True,
+):
+    """Build a country-specific TYNDP-to-premise technology map.
+
+    The premise/TYNDP concordance identifies compatible premise activities for
+    each TYNDP technology. When several activities are compatible, this helper
+    uses the country-specific activity shares from the basic SHRECC ecoinvent
+    mapping to allocate between them. If a country has no usable ecoinvent
+    shares for that technology, the helper falls back to the concordance
+    weights, which keeps future-only premise technologies such as CCS usable.
+
+    Args:
+        technology_mapping: Premise/TYNDP technology concordance as a DataFrame
+            or path to a workbook.
+        ecoinvent_mapping: Basic SHRECC ecoinvent mapping as a DataFrame or
+            path to ``el_map_all_norm.csv``.
+        technology_sheet: Sheet name used when ``technology_mapping`` is an
+            Excel workbook.
+        fallback_activity_concordance: If True, use concordance weights when
+            ecoinvent-derived country shares are unavailable.
+
+    Returns:
+        DataFrame indexed by premise activity. Columns are a MultiIndex of
+        ``source_country`` and TYNDP ``technology``.
+    """
+    if isinstance(technology_mapping, pd.DataFrame):
+        activity_concordance = technology_mapping.copy()
+    else:
+        activity_concordance = load_technology_concordance(
+            technology_mapping,
+            technology_sheet,
+        )
+
+    country_activity_shares = build_country_activity_shares_from_ecoinvent_mapping(
+        ecoinvent_mapping,
+        premise_activities=activity_concordance.index,
+    )
+
+    return build_country_activity_technology_map(
+        activity_concordance=activity_concordance,
+        country_activity_shares=country_activity_shares,
+        fallback_activity_concordance=fallback_activity_concordance,
+    )
 
 
 def _validate_activity_share_builder_input(
