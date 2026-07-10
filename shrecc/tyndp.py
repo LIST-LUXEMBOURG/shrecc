@@ -272,10 +272,10 @@ def _build_z_gross_from_tyndp_tables(
 
     _log("Loading technology and country mappings", verbose)
     concordance = load_technology_concordance(technology_mapping, technology_sheet)
-    country_mapping_df = _read_excel_dataframe(
+    country_mapping_df, connections = load_tyndp_country_mapping(
         country_mapping,
-        sheet_name=countries_sheet,
-        index_col=0,
+        countries_sheet=countries_sheet,
+        connections_sheet=connections_sheet,
     )
     country_codes = country_mapping_df["Country code"]
 
@@ -286,11 +286,6 @@ def _build_z_gross_from_tyndp_tables(
         country_codes,
     )
 
-    connections = _read_excel_dataframe(
-        country_mapping,
-        sheet_name=connections_sheet,
-        index_col=0,
-    )
     connections = connections[~connections.index.duplicated(keep="first")]
 
     _log("Aggregating hourly trade to positive directional country flows", verbose)
@@ -1048,18 +1043,24 @@ def load_technology_concordance(filename, sheet_name):
     """Read and normalize the technology concordance used to filter production.
 
     Args:
-        filename: SHRECC/FIONA technology mapping workbook.
-        sheet_name: Sheet containing the technology concordance.
+        filename: SHRECC/FIONA technology mapping workbook or CSV file.
+        sheet_name: Sheet containing the technology concordance. Ignored for
+            CSV files.
 
     Returns:
         Normalized technology concordance DataFrame.
     """
-    concordance = _read_excel_dataframe(
-        filename,
-        sheet_name=sheet_name,
-        index_col=0,
-        skipfooter=1,
-    ).iloc[:, :-1]
+    filename = Path(filename)
+
+    if filename.suffix.lower() == ".csv":
+        concordance = pd.read_csv(filename, index_col=0)
+    else:
+        concordance = _read_excel_dataframe(
+            filename,
+            sheet_name=sheet_name,
+            index_col=0,
+            skipfooter=1,
+        ).iloc[:, :-1]
 
     concordance = concordance.loc[
         concordance.sum(axis=1) > 0,
@@ -1072,6 +1073,49 @@ def load_technology_concordance(filename, sheet_name):
 
 
 _load_technology_concordance = load_technology_concordance
+
+
+def load_tyndp_country_mapping(
+    mapping_location,
+    countries_sheet="countries",
+    connections_sheet="connections",
+):
+    """Read TYNDP node and connection mappings.
+
+    Args:
+        mapping_location: Either an Excel workbook with ``countries_sheet`` and
+            ``connections_sheet`` sheets, or a directory containing
+            ``tyndp_countries.csv`` and ``tyndp_connections.csv``.
+        countries_sheet: Sheet name used for Excel workbooks.
+        connections_sheet: Sheet name used for Excel workbooks.
+
+    Returns:
+        Tuple of ``(countries, connections)`` DataFrames.
+    """
+    mapping_location = Path(mapping_location)
+
+    if mapping_location.is_dir():
+        countries = pd.read_csv(
+            mapping_location / "tyndp_countries.csv",
+            index_col=0,
+        )
+        connections = pd.read_csv(
+            mapping_location / "tyndp_connections.csv",
+            index_col=0,
+        )
+    else:
+        countries = _read_excel_dataframe(
+            mapping_location,
+            sheet_name=countries_sheet,
+            index_col=0,
+        )
+        connections = _read_excel_dataframe(
+            mapping_location,
+            sheet_name=connections_sheet,
+            index_col=0,
+        )
+
+    return countries, connections
 
 
 def _aggregate_tyndp_production(production, accepted_categories, country_codes):
@@ -1537,4 +1581,3 @@ def _impute_zero_consumption_month_hour_average(
         imputed,
         columns=["time", "country", "fallback", "sample_count", "weight_sum"],
     )
-
