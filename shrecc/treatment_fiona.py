@@ -11,9 +11,11 @@ try:
         build_country_activity_technology_map,
         build_country_activity_shares_from_ecoinvent_mapping,
         build_country_specific_premise_technology_map,
+        build_premise_exchange_geography_map,
         build_premise_region_map,
         map_consumption_mix_regions_xr,
         map_consumption_mix_technologies_xr,
+        premise_activity_mix_to_database_table,
     )
     from shrecc.tyndp import (
         TYNDP_CLIMATE_YEARS,
@@ -49,9 +51,11 @@ except ImportError:
         build_country_activity_technology_map,
         build_country_activity_shares_from_ecoinvent_mapping,
         build_country_specific_premise_technology_map,
+        build_premise_exchange_geography_map,
         build_premise_region_map,
         map_consumption_mix_regions_xr,
         map_consumption_mix_technologies_xr,
+        premise_activity_mix_to_database_table,
     )
     from tyndp import (
         TYNDP_CLIMATE_YEARS,
@@ -84,6 +88,7 @@ __all__ = [
     "build_country_activity_technology_map",
     "build_country_activity_shares_from_ecoinvent_mapping",
     "build_country_specific_premise_technology_map",
+    "build_premise_exchange_geography_map",
     "build_premise_region_map",
     "build_z_gross_from_tyndp_excel",
     "build_z_gross_from_tyndp_pickles",
@@ -98,6 +103,7 @@ __all__ = [
     "load_tyndp_country_mapping",
     "map_consumption_mix_regions_xr",
     "map_consumption_mix_technologies_xr",
+    "premise_activity_mix_to_database_table",
     "read_tyndp_excel_tables",
     "tyndp_scenario_paths",
     "validate_tyndp_scenario",

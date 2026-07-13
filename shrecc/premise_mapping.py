@@ -15,6 +15,71 @@ except ImportError:
 
 
 DEFAULT_PREMISE_IAM_MODELS = ("remind", "image", "remind-eu")
+DEFAULT_ECOINVENT_COUNTRY_ALIASES = {"UK": "GB", "NIE": "GB"}
+DEFAULT_COUNTRY_SPECIFIC_PREMISE_ACTIVITIES = (
+    "electricity production, photovoltaic, commercial",
+)
+
+
+def _load_ecoinvent_mapping(ecoinvent_mapping):
+    """Load and validate the basic SHRECC ecoinvent mapping."""
+    if isinstance(ecoinvent_mapping, pd.DataFrame):
+        mapping = ecoinvent_mapping.copy()
+    else:
+        mapping = pd.read_csv(
+            ecoinvent_mapping,
+            index_col=[0, 1, 2, 3],
+            header=[0, 1],
+        )
+
+    if not isinstance(mapping.index, pd.MultiIndex):
+        raise ValueError("ecoinvent_mapping rows must use a MultiIndex")
+    if "activityName" not in mapping.index.names:
+        raise ValueError("ecoinvent_mapping index must include 'activityName'")
+    if "geography_source" not in mapping.index.names:
+        raise ValueError("ecoinvent_mapping index must include 'geography_source'")
+    if not isinstance(mapping.columns, pd.MultiIndex):
+        raise ValueError("ecoinvent_mapping columns must use a MultiIndex")
+
+    return mapping
+
+
+def _add_country_alias_columns(
+    country_frame,
+    country_aliases=DEFAULT_ECOINVENT_COUNTRY_ALIASES,
+    source_countries=None,
+    fill_value=0,
+):
+    """Add alias country columns using their ecoinvent geography."""
+    result = country_frame.copy()
+    if country_aliases is None:
+        country_aliases = {}
+
+    requested_countries = (
+        pd.Index(source_countries)
+        if source_countries is not None
+        else pd.Index(country_aliases)
+    )
+    for alias in requested_countries:
+        source = country_aliases.get(alias)
+        if (
+            source is not None
+            and alias not in result.columns
+            and source in result.columns
+        ):
+            result[alias] = result[source]
+
+    if source_countries is not None:
+        result = result.reindex(
+            columns=pd.Index(source_countries), fill_value=fill_value
+        )
+
+    return result
+
+
+def _exchange_country_geography(country, country_aliases):
+    """Return the activity exchange geography for a country-specific activity."""
+    return (country_aliases or {}).get(country, country)
 
 
 def build_country_activity_technology_map(
@@ -80,9 +145,7 @@ def build_country_activity_technology_map(
         totals = weighted.sum(axis=0)
 
         for technology in totals.index[totals.eq(0)]:
-            matches = activity_concordance.index[
-                activity_concordance[technology].gt(0)
-            ]
+            matches = activity_concordance.index[activity_concordance[technology].gt(0)]
             if len(matches) == 1:
                 weighted.loc[matches[0], technology] = 1
                 totals.loc[technology] = 1
@@ -104,8 +167,7 @@ def build_country_activity_technology_map(
         )
         raise ValueError(
             "Cannot allocate technologies with multiple compatible activities "
-            "and zero country activity shares. First examples: "
-            + examples
+            "and zero country activity shares. First examples: " + examples
         )
 
     result = pd.concat(country_maps, axis=1, names=["source_country", "technology"])
@@ -116,6 +178,8 @@ def build_country_activity_technology_map(
 def build_country_activity_shares_from_ecoinvent_mapping(
     ecoinvent_mapping,
     premise_activities=None,
+    source_countries=None,
+    country_aliases=DEFAULT_ECOINVENT_COUNTRY_ALIASES,
 ):
     """Collapse the basic SHRECC ecoinvent mapping to activity-country shares.
 
@@ -125,27 +189,16 @@ def build_country_activity_shares_from_ecoinvent_mapping(
             columns must be a MultiIndex whose first level is country.
         premise_activities: Optional activity index used to align the result
             to a premise concordance.
+        source_countries: Optional country index used to align the columns.
+        country_aliases: Optional mapping from requested country codes to the
+            country codes used by ecoinvent.
 
     Returns:
         DataFrame indexed by activity and with source countries as columns.
         Values are not normalized; only their relative magnitude within each
         country and compatible technology is used downstream.
     """
-    if isinstance(ecoinvent_mapping, pd.DataFrame):
-        mapping = ecoinvent_mapping.copy()
-    else:
-        mapping = pd.read_csv(
-            ecoinvent_mapping,
-            index_col=[0, 1, 2, 3],
-            header=[0, 1],
-        )
-
-    if not isinstance(mapping.index, pd.MultiIndex):
-        raise ValueError("ecoinvent_mapping rows must use a MultiIndex")
-    if "activityName" not in mapping.index.names:
-        raise ValueError("ecoinvent_mapping index must include 'activityName'")
-    if not isinstance(mapping.columns, pd.MultiIndex):
-        raise ValueError("ecoinvent_mapping columns must use a MultiIndex")
+    mapping = _load_ecoinvent_mapping(ecoinvent_mapping)
 
     country_activity_shares = (
         mapping.T.groupby(level=0).sum().T.groupby(level="activityName").sum()
@@ -159,7 +212,142 @@ def build_country_activity_shares_from_ecoinvent_mapping(
         )
         country_activity_shares.index.name = "premise_activity"
 
+    country_activity_shares = _add_country_alias_columns(
+        country_activity_shares,
+        country_aliases=country_aliases,
+        source_countries=source_countries,
+        fill_value=0,
+    )
+
     return country_activity_shares
+
+
+def build_country_activity_presence_from_ecoinvent_mapping(
+    ecoinvent_mapping,
+    premise_activities=None,
+    source_countries=None,
+    country_aliases=DEFAULT_ECOINVENT_COUNTRY_ALIASES,
+):
+    """Identify country-specific activities present in the ecoinvent mapping.
+
+    Args:
+        ecoinvent_mapping: Either the ``el_map_all_norm.csv`` DataFrame or a
+            path to that CSV.
+        premise_activities: Optional activity index used to align the result.
+        source_countries: Optional country index used to align the columns.
+        country_aliases: Optional mapping from requested country codes to the
+            country codes used by ecoinvent.
+
+    Returns:
+        Boolean DataFrame indexed by activity and with source countries as
+        columns. ``True`` means the activity exists as an ecoinvent row for
+        that source country.
+    """
+    mapping = _load_ecoinvent_mapping(ecoinvent_mapping)
+
+    rows = mapping.index.to_frame(index=False)
+    presence = pd.crosstab(
+        rows["activityName"],
+        rows["geography_source"],
+    ).gt(0)
+    presence.index.name = "premise_activity"
+    presence.columns.name = "source_country"
+
+    if premise_activities is not None:
+        presence = presence.reindex(premise_activities, fill_value=False)
+        presence.index.name = "premise_activity"
+
+    presence = _add_country_alias_columns(
+        presence,
+        country_aliases=country_aliases,
+        source_countries=source_countries,
+        fill_value=False,
+    )
+    presence.columns.name = "source_country"
+
+    return presence
+
+
+def build_premise_exchange_geography_map(
+    ecoinvent_mapping,
+    premise_region_map,
+    iam_model,
+    premise_activities=None,
+    source_countries=None,
+    country_aliases=DEFAULT_ECOINVENT_COUNTRY_ALIASES,
+    country_specific_premise_activities=DEFAULT_COUNTRY_SPECIFIC_PREMISE_ACTIVITIES,
+):
+    """Choose source-country or premise-region exchange geography per activity.
+
+    Existing country-specific ecoinvent activities keep their source country as
+    exchange geography. Known country-specific premise activities do the same
+    even if they are absent from the basic SHRECC ecoinvent mapping. Other
+    activities fall back to the corresponding premise/IAM region.
+
+    Args:
+        ecoinvent_mapping: Either the ``el_map_all_norm.csv`` DataFrame or a
+            path to that CSV.
+        premise_region_map: DataFrame indexed by source country with IAM model
+            columns.
+        iam_model: Column in ``premise_region_map`` used as fallback region.
+        premise_activities: Optional activity index used to align the result.
+        source_countries: Optional country index used to align the columns.
+        country_aliases: Optional mapping from requested country codes to the
+            country codes used by ecoinvent.
+        country_specific_premise_activities: Optional iterable of premise
+            activity names known to exist at country level.
+
+    Returns:
+        DataFrame indexed by premise activity and with source countries as
+        columns. Values are exchange geographies.
+    """
+    if iam_model not in premise_region_map.columns:
+        raise ValueError(f"{iam_model!r} is not a column in premise_region_map")
+
+    presence = build_country_activity_presence_from_ecoinvent_mapping(
+        ecoinvent_mapping,
+        premise_activities=premise_activities,
+        source_countries=source_countries,
+        country_aliases=country_aliases,
+    )
+
+    countries = presence.columns
+    missing_countries = countries.difference(premise_region_map.index)
+    if not missing_countries.empty:
+        raise ValueError(
+            "No premise region mapping found for source countries: "
+            + ", ".join(map(str, missing_countries.tolist()))
+        )
+
+    regions = premise_region_map.loc[countries, iam_model]
+    missing_regions = regions[regions.isna()]
+    if not missing_regions.empty:
+        raise ValueError(
+            f"No {iam_model!r} premise region found for source countries: "
+            + ", ".join(map(str, missing_regions.index.tolist()))
+        )
+
+    exchange_geography = pd.DataFrame(
+        np.tile(regions.to_numpy(), (len(presence.index), 1)),
+        index=presence.index,
+        columns=countries,
+    )
+    country_specific_premise_activities = pd.Index(
+        country_specific_premise_activities or []
+    )
+    country_specific_premise_activities = presence.index.intersection(
+        country_specific_premise_activities
+    )
+    for country in countries:
+        country_geography = _exchange_country_geography(country, country_aliases)
+        exchange_geography.loc[presence[country], country] = country_geography
+        exchange_geography.loc[country_specific_premise_activities, country] = (
+            country_geography
+        )
+
+    exchange_geography.index.name = "premise_activity"
+    exchange_geography.columns.name = "source_country"
+    return exchange_geography
 
 
 def build_country_specific_premise_technology_map(
@@ -167,6 +355,8 @@ def build_country_specific_premise_technology_map(
     ecoinvent_mapping,
     technology_sheet="concordance",
     fallback_activity_concordance=True,
+    source_countries=None,
+    country_aliases=DEFAULT_ECOINVENT_COUNTRY_ALIASES,
 ):
     """Build a country-specific TYNDP-to-premise technology map.
 
@@ -186,6 +376,10 @@ def build_country_specific_premise_technology_map(
             Excel workbook.
         fallback_activity_concordance: If True, use concordance weights when
             ecoinvent-derived country shares are unavailable.
+        source_countries: Optional country index used to align the mapping to
+            the consumption mix source countries.
+        country_aliases: Optional mapping from requested country codes to the
+            country codes used by ecoinvent.
 
     Returns:
         DataFrame indexed by premise activity. Columns are a MultiIndex of
@@ -202,6 +396,8 @@ def build_country_specific_premise_technology_map(
     country_activity_shares = build_country_activity_shares_from_ecoinvent_mapping(
         ecoinvent_mapping,
         premise_activities=activity_concordance.index,
+        source_countries=source_countries,
+        country_aliases=country_aliases,
     )
 
     return build_country_activity_technology_map(
@@ -209,6 +405,105 @@ def build_country_specific_premise_technology_map(
         country_activity_shares=country_activity_shares,
         fallback_activity_concordance=fallback_activity_concordance,
     )
+
+
+def premise_activity_mix_to_database_table(
+    premise_activity_mix_xr,
+    exchange_geography_map,
+    countries=None,
+    times=None,
+    general_range=None,
+    product="electricity, high voltage",
+    unit="kWh",
+):
+    """Convert a mapped premise activity mix to the SHRECC database table shape.
+
+    Args:
+        premise_activity_mix_xr: Consumption mix DataArray with
+            ``source_country`` and ``premise_activity`` dimensions.
+        exchange_geography_map: DataFrame indexed by premise activity and with
+            source countries as columns. Values are exchange geographies.
+        countries: Optional consuming countries to select.
+        times: Optional explicit timestamps to select.
+        general_range: Optional start/end timestamps used as a time slice.
+        product: Product label used in the output MultiIndex.
+        unit: Unit label used in the output MultiIndex.
+
+    Returns:
+        DataFrame indexed by ``geography``, ``activityName``, ``product``, and
+        ``unit``. Columns are consuming countries.
+    """
+    required_dims = {"source_country", "premise_activity", "consumer_country"}
+    missing_dims = required_dims.difference(premise_activity_mix_xr.dims)
+    if missing_dims:
+        raise ValueError(
+            "premise_activity_mix_xr is missing required dimensions: "
+            + ", ".join(sorted(missing_dims))
+        )
+
+    mix = premise_activity_mix_xr
+    if countries is not None:
+        mix = mix.sel(consumer_country=list(countries))
+
+    if times is not None:
+        mix = mix.sel(time=pd.to_datetime(times))
+    elif general_range is not None:
+        mix = mix.sel(time=slice(*pd.to_datetime(general_range)))
+
+    if "time" in mix.dims:
+        mix = mix.mean("time")
+
+    source_countries = mix["source_country"].to_index()
+    premise_activities = mix["premise_activity"].to_index()
+    exchange_geography_map = exchange_geography_map.reindex(
+        index=premise_activities,
+        columns=source_countries,
+    )
+
+    if exchange_geography_map.isna().to_numpy().any():
+        raise ValueError("exchange_geography_map is missing required entries")
+
+    exchange_geographies = (
+        exchange_geography_map.rename_axis(
+            index="premise_activity",
+            columns="source_country",
+        )
+        .stack()
+        .rename("geography")
+        .reset_index()
+    )
+
+    table = mix.to_dataframe(name="share").reset_index()
+    table = table.merge(
+        exchange_geographies,
+        on=["premise_activity", "source_country"],
+        how="left",
+        validate="many_to_one",
+    )
+    if table["geography"].isna().any():
+        raise ValueError("Could not assign exchange geography to all rows")
+
+    table = (
+        table.groupby(
+            ["geography", "premise_activity", "consumer_country"],
+            dropna=False,
+        )["share"]
+        .sum()
+        .unstack("consumer_country", fill_value=0)
+    )
+
+    table.index = pd.MultiIndex.from_arrays(
+        [
+            table.index.get_level_values("geography"),
+            table.index.get_level_values("premise_activity"),
+            [product] * len(table),
+            [unit] * len(table),
+        ],
+        names=["geography", "activityName", "product", "unit"],
+    )
+    table.columns.name = None
+
+    return table
 
 
 def _validate_activity_share_builder_input(
@@ -241,27 +536,42 @@ class PremiseConsumptionMixMapper:
         technology_mapping: Technology concordance as a DataFrame or path to a
             SHRECC/FIONA technology mapping workbook.
         iam_model: premise/IAM model used for geography mapping.
+        ecoinvent_mapping: Optional basic SHRECC ecoinvent mapping. When
+            supplied, technology allocation uses country-specific ecoinvent
+            shares where available and concordance fallback otherwise.
         topology_files: Optional mapping from IAM model names to premise-style
             topology JSON files.
         technology_sheet: Sheet name used when ``technology_mapping`` is an
             Excel workbook.
         on_missing_model: Behavior when a premise geography map cannot be
             built. Must be ``"warn"``, ``"raise"``, or ``"ignore"``.
+        fallback_activity_concordance: If True, use normalized concordance
+            weights when country-specific ecoinvent shares are unavailable.
+        country_specific_premise_activities: Optional iterable of premise
+            activities known to exist at country level.
     """
 
     def __init__(
         self,
         technology_mapping,
         iam_model,
+        ecoinvent_mapping=None,
         topology_files=None,
         technology_sheet="concordance",
         on_missing_model="warn",
+        fallback_activity_concordance=True,
+        country_aliases=DEFAULT_ECOINVENT_COUNTRY_ALIASES,
+        country_specific_premise_activities=DEFAULT_COUNTRY_SPECIFIC_PREMISE_ACTIVITIES,
     ):
         self.technology_mapping = technology_mapping
+        self.ecoinvent_mapping = ecoinvent_mapping
         self.iam_model = iam_model
         self.topology_files = topology_files or {}
         self.technology_sheet = technology_sheet
         self.on_missing_model = on_missing_model
+        self.fallback_activity_concordance = fallback_activity_concordance
+        self.country_aliases = country_aliases
+        self.country_specific_premise_activities = country_specific_premise_activities
         self._premise_region_map = None
 
     def build_region_map(self, countries):
@@ -293,9 +603,20 @@ class PremiseConsumptionMixMapper:
             Consumption mix DataArray with ``premise_activity`` replacing
             ``technology``.
         """
+        technology_mapping = self.technology_mapping
+        if self.ecoinvent_mapping is not None:
+            technology_mapping = build_country_specific_premise_technology_map(
+                self.technology_mapping,
+                self.ecoinvent_mapping,
+                technology_sheet=self.technology_sheet,
+                fallback_activity_concordance=self.fallback_activity_concordance,
+                source_countries=consumption_mix_xr["source_country"].to_index(),
+                country_aliases=self.country_aliases,
+            )
+
         return map_consumption_mix_technologies_xr(
             consumption_mix_xr,
-            technology_mapping=self.technology_mapping,
+            technology_mapping=technology_mapping,
             technology_sheet=self.technology_sheet,
             check=check,
         )
@@ -358,10 +679,41 @@ class PremiseConsumptionMixMapper:
             check=check,
         )
 
+    def build_exchange_geography_map(
+        self,
+        premise_activity_mix_xr,
+        premise_region_map=None,
+    ):
+        """Build exchange geography map for a mapped premise activity mix."""
+        if self.ecoinvent_mapping is None:
+            raise ValueError(
+                "ecoinvent_mapping is required to build exchange geography map"
+            )
+
+        if premise_region_map is None:
+            if self._premise_region_map is None:
+                self.build_region_map(
+                    premise_activity_mix_xr["source_country"].to_index()
+                )
+            premise_region_map = self._premise_region_map
+
+        return build_premise_exchange_geography_map(
+            self.ecoinvent_mapping,
+            premise_region_map,
+            iam_model=self.iam_model,
+            premise_activities=premise_activity_mix_xr["premise_activity"].to_index(),
+            source_countries=premise_activity_mix_xr["source_country"].to_index(),
+            country_aliases=self.country_aliases,
+            country_specific_premise_activities=(
+                self.country_specific_premise_activities
+            ),
+        )
+
 
 def build_premise_region_map(
     countries,
     iam_models=DEFAULT_PREMISE_IAM_MODELS,
+    topology_files=None,
     on_missing_model="warn",
 ):
     """Map country codes to premise/IAM regions for one or more IAM models.
@@ -385,28 +737,36 @@ def build_premise_region_map(
     if on_missing_model not in {"warn", "raise", "ignore"}:
         raise ValueError("on_missing_model must be 'warn', 'raise', or 'ignore'")
 
-    try:
-        from premise.geomap import Geomap
-    except ImportError as exc:
-        raise ImportError(
-            "build_premise_region_map requires the optional 'premise' dependency. "
-            "Install it with `pip install shrecc[premise]`."
-        ) from exc
-
+    topology_files = topology_files or {}
     country_index = pd.Index(list(countries), name="country").unique().sort_values()
     region_map = pd.DataFrame(index=country_index)
+    geomap_cls = None
 
     for model in iam_models:
+        if model in topology_files:
+            region_map[model] = _map_countries_with_topology_file(
+                country_index,
+                topology_files[model],
+            )
+            continue
+
+        if geomap_cls is None:
+            try:
+                from premise.geomap import Geomap as geomap_cls
+            except ImportError as exc:
+                raise ImportError(
+                    "build_premise_region_map requires the optional 'premise' "
+                    "dependency. Install it with `pip install shrecc[premise]`."
+                ) from exc
 
         try:
-            geomap = Geomap(model)
+            geomap = geomap_cls(model)
         except FileNotFoundError as exc:
             if on_missing_model == "raise":
                 raise
             if on_missing_model == "warn":
                 warnings.warn(
-                    "Could not build geography map for IAM model "
-                    f"{model!r}: {exc}",
+                    "Could not build geography map for IAM model " f"{model!r}: {exc}",
                     stacklevel=2,
                 )
             region_map[model] = pd.NA
@@ -492,9 +852,7 @@ def map_consumption_mix_technologies_xr(
 
     if check:
         total_dims = [
-            dim
-            for dim in ("source_country", "premise_activity")
-            if dim in mapped.dims
+            dim for dim in ("source_country", "premise_activity") if dim in mapped.dims
         ]
         totals = mapped.sum(total_dims)
         np.testing.assert_allclose(totals.to_numpy(), 1, atol=1e-8)
