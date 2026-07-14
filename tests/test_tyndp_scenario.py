@@ -7,6 +7,60 @@ import pytest
 from shrecc import tyndp
 
 
+def test_load_technology_concordance_accepts_csv(tmp_path):
+    concordance_file = tmp_path / "technology_mapping.csv"
+    pd.DataFrame(
+        {
+            "wind": [1, 3, 0],
+            "unused": [0, 0, 0],
+        },
+        index=pd.Index(["wind small", "wind large", "network"], name="activity"),
+    ).to_csv(concordance_file)
+
+    result = tyndp.load_technology_concordance(
+        concordance_file,
+        sheet_name="ignored for csv",
+    )
+
+    expected = pd.DataFrame(
+        {"wind": [0.25, 0.75]},
+        index=pd.Index(["wind small", "wind large"], name="activity"),
+    )
+    expected.columns.name = "Category"
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_load_tyndp_country_mapping_accepts_csv_directory(tmp_path):
+    mapping_dir = tmp_path / "tyndp"
+    mapping_dir.mkdir()
+    countries_file = mapping_dir / "tyndp_countries.csv"
+    connections_file = mapping_dir / "tyndp_connections.csv"
+
+    pd.DataFrame(
+        {
+            "Country code": ["ES", "PT"],
+            "Country name": ["Spain", "Portugal"],
+        },
+        index=pd.Index(["ES00", "PT00"], name="Bidding Zone"),
+    ).to_csv(countries_file)
+    pd.DataFrame(
+        {
+            "BZ from": ["ES00"],
+            "BZ to": ["PT00"],
+            "Country from": ["ES"],
+            "Country to": ["PT"],
+            "Country line": ["ES-PT"],
+        },
+        index=pd.Index(["ES00-PT00"], name="BZ line"),
+    ).to_csv(connections_file)
+
+    countries, connections = tyndp.load_tyndp_country_mapping(mapping_dir)
+
+    assert countries.loc["ES00", "Country code"] == "ES"
+    assert connections.loc["ES00-PT00", "Country to"] == "PT"
+
+
 def test_tyndp_scenario_paths_normalizes_inputs(tmp_path):
     paths = tyndp.tyndp_scenario_paths(
         tmp_path,

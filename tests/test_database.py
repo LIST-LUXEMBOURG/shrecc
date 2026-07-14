@@ -1534,6 +1534,7 @@ def test_map_known_inputs_basic(
     assert known_inputs[("FR", "Hydro", "kWh")] == "fr_hydro_result"
     assert ("GB", "Wind", "kWh") in known_inputs
     assert known_inputs[("GB", "Wind", "kWh")] == "gb_wind_result"
+    assert known_inputs[("UK", "Wind", "kWh")] == "gb_wind_result"
     # Assert network inputs
     assert (
         "GLO",
@@ -1596,6 +1597,41 @@ def test_map_known_inputs_empty_dataframe(
     # Assertions
     assert known_inputs == {}
     assert known_inputs_network == {}
+
+
+@patch("shrecc.database.get_network_activities", return_value=[])
+@patch("shrecc.database.Filter")
+@patch("shrecc.database.Query")
+@patch("shrecc.database.bd.Database")
+def test_map_known_inputs_strict_raises_only_for_nonzero_rows(
+    mock_database_cls,
+    mock_query_cls,
+    mock_filter_cls,
+    mock_get_network_activities,
+):
+    index = pd.MultiIndex.from_tuples(
+        [
+            ("FR", "Required activity", "electricity", "kWh"),
+            ("DE", "Zero activity", "electricity", "kWh"),
+        ]
+    )
+    dataframe = pd.DataFrame({"ES": [1.0, 0.0]}, index=index)
+    mock_database_cls.return_value.load.return_value = object()
+    mock_query_cls.return_value.return_value = []
+
+    with pytest.raises(
+        ValueError,
+        match=r"Required activity, FR \(0 matches\)",
+    ) as exc:
+        map_known_inputs(
+            "premise-db",
+            dataframe,
+            strict=True,
+            include_network=False,
+        )
+
+    assert "Zero activity" not in str(exc.value)
+    mock_get_network_activities.assert_not_called()
 
 
 # ────────────────────────────────────────────────────────────────
@@ -1826,6 +1862,7 @@ def dataframe_filt_for_create_database():
     return pd.DataFrame(data, index=index, columns=columns)
 
 
+@patch("shrecc.database.bd.projects.set_current")
 @patch("shrecc.database.setup_database")
 @patch("shrecc.database.map_known_inputs")
 @patch("shrecc.database.create_activity_dict")
@@ -1833,6 +1870,7 @@ def test_create_database_with_network_true(
     mock_create_activity_dict,
     mock_map_known_inputs,
     mock_setup_database,
+    mock_set_current,
     dataframe_filt_for_create_database,
 ):
     # Prepare mocks
@@ -1854,16 +1892,25 @@ def test_create_database_with_network_true(
     )
 
     # Check calls
+    mock_set_current.assert_called_once_with("proj")
     mock_setup_database.assert_called_once_with("proj", "db")
     mock_map_known_inputs.assert_called_once_with(
-        "eidb", dataframe_filt_for_create_database
+        "eidb",
+        dataframe_filt_for_create_database,
+        strict=False,
+        include_network=True,
     )
     mock_create_activity_dict.assert_called_once_with(
-        dataframe_filt_for_create_database, known_inputs, known_inputs_network, "db"
+        dataframe_filt_for_create_database,
+        known_inputs,
+        known_inputs_network,
+        "db",
+        eidb_name="eidb",
     )
     mock_db.write.assert_called_once_with(activities)
 
 
+@patch("shrecc.database.bd.projects.set_current")
 @patch("shrecc.database.setup_database")
 @patch("shrecc.database.map_known_inputs")
 @patch("shrecc.database.create_activity_dict")
@@ -1871,6 +1918,7 @@ def test_create_database_with_network_false(
     mock_create_activity_dict,
     mock_map_known_inputs,
     mock_setup_database,
+    mock_set_current,
     dataframe_filt_for_create_database,
 ):
     mock_db = MagicMock()
@@ -1890,15 +1938,22 @@ def test_create_database_with_network_false(
 
     mock_setup_database.assert_called_once_with("proj", "db")
     mock_map_known_inputs.assert_called_once_with(
-        "eidb", dataframe_filt_for_create_database
+        "eidb",
+        dataframe_filt_for_create_database,
+        strict=False,
+        include_network=False,
     )
-    # The third argument to create_activity_dict should be None (the _ from map_known_inputs)
     mock_create_activity_dict.assert_called_once_with(
-        dataframe_filt_for_create_database, known_inputs, None, "db"
+        dataframe_filt_for_create_database,
+        known_inputs,
+        None,
+        "db",
+        eidb_name="eidb",
     )
     mock_db.write.assert_called_once_with(activities)
 
 
+@patch("shrecc.database.bd.projects.set_current")
 @patch("shrecc.database.setup_database")
 @patch("shrecc.database.map_known_inputs")
 @patch("shrecc.database.create_activity_dict")
@@ -1906,6 +1961,7 @@ def test_create_database_empty_activities(
     mock_create_activity_dict,
     mock_map_known_inputs,
     mock_setup_database,
+    mock_set_current,
     dataframe_filt_for_create_database,
 ):
     mock_db = MagicMock()
@@ -1924,3 +1980,30 @@ def test_create_database_empty_activities(
     )
 
     mock_db.write.assert_called_once_with({})
+
+
+@patch("shrecc.database.bd.projects.set_current")
+@patch("shrecc.database.setup_database")
+@patch("shrecc.database.map_known_inputs")
+@patch("shrecc.database.create_activity_dict")
+def test_create_database_strict_validates_before_replacing_output_database(
+    mock_create_activity_dict,
+    mock_map_known_inputs,
+    mock_setup_database,
+    mock_set_current,
+    dataframe_filt_for_create_database,
+):
+    mock_map_known_inputs.side_effect = ValueError("missing premise activity")
+
+    with pytest.raises(ValueError, match="missing premise activity"):
+        create_database(
+            dataframe_filt_for_create_database,
+            "proj",
+            "db",
+            "premise-db",
+            strict=True,
+        )
+
+    mock_setup_database.assert_not_called()
+    mock_create_activity_dict.assert_not_called()
+    mock_set_current.assert_called_once_with("proj")
