@@ -374,13 +374,20 @@ def setup_database(project_name, db_name):
     return elec_db
 
 
-def map_known_inputs(eidb_name, dataframe_filt):
+def map_known_inputs(
+    eidb_name,
+    dataframe_filt,
+    strict=False,
+    include_network=True,
+):
     """
     Maps known inputs from the ecoinvent database to the filtered dataframe.
 
     Args:
         eidb_name (str): The name of the ecoinvent database in the BW project.
         dataframe_filt (pd.DataFrame): The filtered dataframe containing technology data.
+        strict (bool): Raise an error if a required activity cannot be matched uniquely.
+        include_network (bool): Also resolve the fixed electricity-network inputs.
 
     Returns:
         dict: A dictionary mapping known inputs to their corresponding entries in the ecoinvent database.
@@ -388,12 +395,16 @@ def map_known_inputs(eidb_name, dataframe_filt):
     ei_db = bd.Database(eidb_name)
     ei_db_data = ei_db.load()
     known_inputs = {}
+    missing_inputs = []
     country_to_code = {
         "Germany": "DE",
         "France": "FR",
     }
-    for idx in dataframe_filt.index:
-        loc, name, prod, unit = idx
+    active_rows = dataframe_filt.ne(0).any(axis=1)
+    for idx in dataframe_filt.index[active_rows]:
+        original_loc, original_name, prod, unit = idx
+        loc = original_loc
+        name = original_name
         # Region names in ENTSOE and ecoinvent don't exactly match
         # Only UK seems concerned but consider using a dictionary
         if loc == "UK":
@@ -417,10 +428,14 @@ def map_known_inputs(eidb_name, dataframe_filt):
         q.add(filter_unit)
         results = q(ei_db_data)
         if len(results) == 1:
-            known_inputs[(loc, name, unit)] = list(results).pop()
+            exchange = list(results).pop()
+            known_inputs[(original_loc, original_name, unit)] = exchange
+            known_inputs[(loc, name, unit)] = exchange
         else:
             print("Couldnt find activity:" + name + ", " + loc)
-    network = get_network_activities(eidb_name)
+            missing_inputs.append((loc, name, len(results)))
+
+    network = get_network_activities(eidb_name) if include_network else []
     known_inputs_network = {}
     for act in network:
         loc = act["loc"]
@@ -435,6 +450,18 @@ def map_known_inputs(eidb_name, dataframe_filt):
             known_inputs_network[(loc, name)] = list(results).pop()
         else:
             print("Couldnt find activity:" + name)
+            missing_inputs.append((loc, name, len(results)))
+
+    if strict and missing_inputs:
+        details = "; ".join(
+            f"{name}, {loc} ({matches} matches)"
+            for loc, name, matches in missing_inputs
+        )
+        raise ValueError(
+            f"Could not uniquely map required activities in {eidb_name!r}: "
+            + details
+        )
+
     return known_inputs, known_inputs_network
 
 
@@ -484,7 +511,13 @@ def get_network_activities(eidb_name):
     return network_act
 
 
-def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_name):
+def create_activity_dict(
+    dataframe_filt,
+    known_inputs,
+    known_inputs_network,
+    db_name,
+    eidb_name=None,
+):
     """
     Creates a dictionary of activities for the BW database based on the filtered dataframe and known inputs.
 
@@ -493,6 +526,8 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
         known_inputs (dict): A dictionary mapping known inputs to ecoinvent database entries.
         known_inputs_network (dict): A dictionary mapping known network inputs to ecoinvent database entries.
         db_name (str): The name of the BW database.
+        eidb_name (str): Background database name used to select version-specific
+            network activities. Defaults to ``db_name`` for backwards compatibility.
 
     Returns:
         dict: A dictionary containing activities to be written to the BW2 database.
@@ -548,7 +583,7 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
                         "type": "technosphere",
                     }
                     act["exchanges"].append(new_exchange)
-        network = get_network_activities(db_name)
+        network = get_network_activities(eidb_name or db_name)
         specific_network = [
             "market for transmission network, electricity, high voltage direct current land cable",
             "market for transmission network, electricity, high voltage direct current subsea cable",
@@ -637,7 +672,14 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
     return activities
 
 
-def create_database(dataframe_filt, project_name, db_name, eidb_name, network="True"):
+def create_database(
+    dataframe_filt,
+    project_name,
+    db_name,
+    eidb_name,
+    network=True,
+    strict=False,
+):
     """
     Creates an "ecoinvent-like" BW database based on a previously filtered dataframe.
 
@@ -645,19 +687,32 @@ def create_database(dataframe_filt, project_name, db_name, eidb_name, network="T
         dataframe_filt (pd.DataFrame): Scaled and filtered dataframe.
         project_name (str): BW project name to which the database will be saved.
         db_name (str): Name of the BW database to be created.
-        eidb_name (str): Name of the ecoinvent database. Must be the same as in the BW project.
-        network (bool): If True, network activities will be considered.
+        eidb_name (str): Name of the ecoinvent or premise background database.
+            Must be the same as in the BW project.
+        network (bool): If True, network activities will be considered. The legacy
+            strings ``"True"`` and ``"False"`` are also accepted.
+        strict (bool): Raise before writing if any required background activity
+            cannot be matched uniquely.
 
     Returns:
         None
     """
+    include_network = network is True or (
+        isinstance(network, str) and network.lower() == "true"
+    )
+    bd.projects.set_current(project_name)
+    known_inputs, known_inputs_network = map_known_inputs(
+        eidb_name,
+        dataframe_filt,
+        strict=strict,
+        include_network=include_network,
+    )
+    activities = create_activity_dict(
+        dataframe_filt,
+        known_inputs,
+        known_inputs_network,
+        db_name,
+        eidb_name=eidb_name,
+    )
     elec_db = setup_database(project_name, db_name)
-    if network == "True":
-        known_inputs, known_inputs_network = map_known_inputs(eidb_name, dataframe_filt)
-        activities = create_activity_dict(
-            dataframe_filt, known_inputs, known_inputs_network, db_name
-        )
-    else:
-        known_inputs, _ = map_known_inputs(eidb_name, dataframe_filt)
-        activities = create_activity_dict(dataframe_filt, known_inputs, _, db_name)
     elec_db.write(activities)
