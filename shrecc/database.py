@@ -16,6 +16,7 @@ from bw2data.query import Filter, Query
 from shrecc.treatment import load_from_pickle, save_to_pickle
 
 UNUSED_SOURCE = "Import balance (physical)"
+DEFAULT_ACTIVITY_FALLBACK_LOCATIONS = ("RER", "RoW", "GLO")
 
 
 def filt_cutoff(
@@ -379,6 +380,7 @@ def map_known_inputs(
     dataframe_filt,
     strict=False,
     include_network=True,
+    fallback_locations=DEFAULT_ACTIVITY_FALLBACK_LOCATIONS,
 ):
     """
     Maps known inputs from the ecoinvent database to the filtered dataframe.
@@ -388,6 +390,8 @@ def map_known_inputs(
         dataframe_filt (pd.DataFrame): The filtered dataframe containing technology data.
         strict (bool): Raise an error if a required activity cannot be matched uniquely.
         include_network (bool): Also resolve the fixed electricity-network inputs.
+        fallback_locations: Ordered fallback geographies tried when the requested
+            activity name and unit do not exist at the requested geography.
 
     Returns:
         dict: A dictionary mapping known inputs to their corresponding entries in the ecoinvent database.
@@ -419,18 +423,34 @@ def map_known_inputs(
         if any(v in eidb_name for v in ("3.11", "3.12")):
             pattern = re.compile(r"from (Germany|France)")
             name = pattern.sub(repl, name)
-        q = Query()
-        filter_name = Filter("name", "is", name)
-        filter_loc = Filter("location", "is", loc)
-        filter_unit = Filter("unit", "is", "kilowatt hour")
-        q.add(filter_name)
-        q.add(filter_loc)
-        q.add(filter_unit)
-        results = q(ei_db_data)
+        candidate_locations = [loc]
+        candidate_locations.extend(
+            fallback_loc
+            for fallback_loc in fallback_locations or ()
+            if fallback_loc != loc
+        )
+        results = []
+        resolved_loc = loc
+        for candidate_loc in candidate_locations:
+            q = Query()
+            q.add(Filter("name", "is", name))
+            q.add(Filter("location", "is", candidate_loc))
+            q.add(Filter("unit", "is", "kilowatt hour"))
+            results = q(ei_db_data)
+            resolved_loc = candidate_loc
+            if results:
+                break
+
         if len(results) == 1:
             exchange = list(results).pop()
             known_inputs[(original_loc, original_name, unit)] = exchange
             known_inputs[(loc, name, unit)] = exchange
+            known_inputs[(resolved_loc, name, unit)] = exchange
+            if resolved_loc != loc:
+                print(
+                    f"Using fallback activity:{name}, {resolved_loc} "
+                    f"for requested geography {loc}"
+                )
         else:
             print("Couldnt find activity:" + name + ", " + loc)
             missing_inputs.append((loc, name, len(results)))

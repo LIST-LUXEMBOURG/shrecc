@@ -1603,6 +1603,64 @@ def test_map_known_inputs_empty_dataframe(
 @patch("shrecc.database.Filter")
 @patch("shrecc.database.Query")
 @patch("shrecc.database.bd.Database")
+def test_map_known_inputs_uses_same_activity_at_fallback_location(
+    mock_database_cls,
+    mock_query_cls,
+    mock_filter_cls,
+    mock_get_network_activities,
+    capsys,
+):
+    activity = "electricity production, wind, 1-3MW turbine, offshore"
+    index = pd.MultiIndex.from_tuples(
+        [("ESC", activity, "electricity, high voltage", "kWh")]
+    )
+    dataframe = pd.DataFrame({"IT": [0.2]}, index=index)
+    mock_database_cls.return_value.load.return_value = object()
+
+    class DummyFilter:
+        def __init__(self, field, op, value):
+            self.field = field
+            self.value = value
+
+    mock_filter_cls.side_effect = DummyFilter
+
+    def fake_query_factory():
+        class Q:
+            def __init__(self):
+                self.filters = []
+
+            def add(self, item):
+                self.filters.append(item)
+
+            def __call__(self, data):
+                location = next(
+                    item.value for item in self.filters if item.field == "location"
+                )
+                if location == "RoW":
+                    return ["offshore-row-exchange"]
+                return []
+
+        return Q()
+
+    mock_query_cls.side_effect = fake_query_factory
+
+    known_inputs, _ = map_known_inputs(
+        "premise-db",
+        dataframe,
+        strict=True,
+        include_network=False,
+    )
+
+    assert known_inputs[("ESC", activity, "kWh")] == "offshore-row-exchange"
+    assert known_inputs[("RoW", activity, "kWh")] == "offshore-row-exchange"
+    assert "Using fallback activity" in capsys.readouterr().out
+    mock_get_network_activities.assert_not_called()
+
+
+@patch("shrecc.database.get_network_activities", return_value=[])
+@patch("shrecc.database.Filter")
+@patch("shrecc.database.Query")
+@patch("shrecc.database.bd.Database")
 def test_map_known_inputs_strict_raises_only_for_nonzero_rows(
     mock_database_cls,
     mock_query_cls,
