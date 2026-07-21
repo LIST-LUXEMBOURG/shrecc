@@ -2,7 +2,8 @@
 # Licensed under the MIT License (see LICENSE file for details).
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
-import pickle
+"""Legacy full-matrix treatment retained for validation and compatibility."""
+
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
@@ -14,8 +15,14 @@ from pypardiso import spsolve
 from scipy.linalg import block_diag
 from scipy.sparse import coo_array, csc_matrix, csr_matrix, identity
 
+from shrecc.energy_charts import data_processing
+from shrecc.result_store import (
+    load_pickle as load_from_pickle,
+    save_pickle as save_to_pickle,
+)
 
-def data_processing(data_df, year, path_to_data=None):
+
+def _legacy_data_processing(data_df, year, path_to_data=None):
     """
     Processes data, adds missing countries, and correctly divides them between consumption and demand.
 
@@ -139,35 +146,6 @@ def data_processing(data_df, year, path_to_data=None):
     treating_data(year, n_c, n_p, t_index, Z_net, data_dir)
     now = datetime.now()
     print(f"{now} ..all done!")
-
-
-def save_to_pickle(obj, filename):
-    """
-    Saves an object to a pickle file.
-
-    Args:
-        obj: The object to be saved.
-        filename (Path): Path to the filename where the object will be saved.
-
-    Returns:
-        None
-    """
-    with open(filename, "wb") as f:
-        pickle.dump(obj, f)
-
-
-def load_from_pickle(filename):
-    """
-    Loads an object from a pickle file.
-
-    Args:
-        filename (Path): Path to the filename where the object will be saved.
-
-    Returns:
-        object: The object loaded from the pickle file.
-    """
-    with open(filename, "rb") as f:
-        return pickle.load(f)
 
 
 def add_missing_elements(df, existing_elements, all_elements, axis=0, fill_value=0):

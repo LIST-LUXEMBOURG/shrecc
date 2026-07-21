@@ -130,5 +130,8 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Ignore data files (if needed)
-data/*.pkl
+# Local/generated data
+data/**/*.pkl
+data/**/*.zip
+data/**/*.xlsb
+notebooks/data/

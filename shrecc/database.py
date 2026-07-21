@@ -13,7 +13,17 @@ import numpy as np
 import pandas as pd
 from bw2data.query import Filter, Query
 
-from shrecc.treatment import load_from_pickle, save_to_pickle
+from shrecc.mapping import (
+    activity_mix_to_database_table,
+    map_consumption_mix_to_ecoinvent_activities,
+)
+from shrecc.result_store import (
+    MANIFEST_FILENAME,
+    consumption_result_cache_path,
+    load_pickle as load_from_pickle,
+    load_consumption_result_cache,
+    save_pickle as save_to_pickle,
+)
 
 UNUSED_SOURCE = "Import balance (physical)"
 DEFAULT_ACTIVITY_FALLBACK_LOCATIONS = ("RER", "RoW", "GLO")
@@ -66,22 +76,65 @@ def filt_cutoff(
     else:
         raise ValueError("Either `times` or `general_range` must be provided")
 
-    dataframe = tech_mapping(year, path_to_data)
     now = datetime.now()
     print(f"{now} Filtering dataframe...")
-    dataframe = dataframe.droplevel("source", axis=1)
-    dataframe = filter_by_countries(dataframe, countries)
+    cache_dir = consumption_result_cache_path(path_to_data, year)
+    if (cache_dir / MANIFEST_FILENAME).is_file():
+        dataframe = _filt_canonical_consumption_results(
+            cache_dir,
+            countries=countries,
+            times=times,
+            general_range=general_range,
+            refined_range=refined_range,
+            freq=freq,
+        )
+    else:
+        dataframe = tech_mapping(year, path_to_data)
+        dataframe = dataframe.droplevel("source", axis=1)
+        dataframe = filter_by_countries(dataframe, countries)
 
-    if len(times):
-        # For backwards compatibility and making sure datetime is used in the filtering
-        times = pd.to_datetime(times)
-        dataframe = filter_by_times(dataframe, times)
-    if general_range:
-        dataframe = filter_by_range(dataframe, general_range, refined_range, freq)
+        if len(times):
+            # Ensure datetime is used in the backwards-compatible filtering.
+            times = pd.to_datetime(times)
+            dataframe = filter_by_times(dataframe, times)
+        if general_range:
+            dataframe = filter_by_range(dataframe, general_range, refined_range, freq)
     dataframe = apply_cutoff(dataframe, cutoff, include_cutoff)
     now = datetime.now()
     print(f"{now} Dataframe filtered.")
     return dataframe
+
+
+def _filt_canonical_consumption_results(
+    cache_dir,
+    *,
+    countries,
+    times,
+    general_range,
+    refined_range,
+    freq,
+):
+    selected_times = times if len(times) else None
+    selected_range = general_range if general_range else None
+    results = load_consumption_result_cache(
+        cache_dir,
+        times=selected_times,
+        general_range=selected_range,
+        variables=["consumption_mix"],
+    )
+    activity_mapping = load_mapping_data(files("shrecc.data"))
+    activity_mix = map_consumption_mix_to_ecoinvent_activities(
+        results["consumption_mix"],
+        activity_mapping,
+    )
+    return activity_mix_to_database_table(
+        activity_mix,
+        countries=countries,
+        times=selected_times,
+        general_range=selected_range,
+        refined_range=refined_range if refined_range else None,
+        freq=freq if freq else None,
+    )
 
 
 def load_mapping_data(mapping_location):

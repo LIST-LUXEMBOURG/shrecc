@@ -67,7 +67,7 @@ def test_data_processing(mock_treating_data, tmp_path, mock_data_df):
     expected_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Run data_processing
-    data_processing(data_df, year, path_to_data=tmp_path)
+    data_processing(data_df, year, path_to_data=tmp_path, legacy=True)
     # Check that the expected files are created
     expected_Z_load = pd.DataFrame(
         [
@@ -160,6 +160,28 @@ def test_data_processing(mock_treating_data, tmp_path, mock_data_df):
     assert z_indices["columns"].equals(
         expected_Z_indices["columns"]
     ), "Z_indices columns do not match expected"
+
+
+@patch("shrecc.energy_charts.write_energy_charts_consumption_cache")
+def test_data_processing_uses_canonical_chunked_cache(
+    mock_write_cache,
+    tmp_path,
+    mock_data_df,
+):
+    cache_dir = data_processing(
+        mock_data_df,
+        2023,
+        path_to_data=tmp_path,
+        time_chunk_size=24,
+    )
+
+    assert cache_dir == tmp_path / "2023" / "consumption_results_v1"
+    mock_write_cache.assert_called_once_with(
+        mock_data_df,
+        cache_dir,
+        time_chunk_size=24,
+        include_consumption_mix_volume=False,
+    )
 
 
 # ───────────────────────────────────────────────────────────

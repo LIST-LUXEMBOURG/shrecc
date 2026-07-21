@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from shrecc.mapping import filter_consumption_mix_time
+
 try:
     from .tyndp import load_technology_concordance
 except ImportError:
@@ -522,44 +524,14 @@ def _filter_premise_activity_mix_time(
     refined_range=None,
     freq=None,
 ):
-    """Apply the time-selection semantics used by SHRECC ``filt_cutoff``."""
-    has_time_filter = any(
-        value is not None for value in (times, general_range, refined_range, freq)
+    """Backward-compatible wrapper around the shared time filter."""
+    return filter_consumption_mix_time(
+        mix,
+        times=times,
+        general_range=general_range,
+        refined_range=refined_range,
+        freq=freq,
     )
-    if "time" not in mix.dims:
-        if has_time_filter:
-            raise ValueError(
-                "Cannot filter a premise activity mix without a time dimension"
-            )
-        return mix
-
-    if times is not None and len(times):
-        requested_times = pd.DatetimeIndex(pd.to_datetime(times))
-        mix = mix.sel(time=mix["time"].isin(requested_times))
-
-    if general_range is not None:
-        if len(general_range) != 2:
-            raise ValueError("general_range must contain a start and end timestamp")
-        start, end = pd.to_datetime(general_range)
-        mix = mix.sel(time=slice(start, end))
-
-        if refined_range is not None and len(refined_range):
-            if freq is None:
-                raise ValueError("freq is required when refined_range is supplied")
-            timestamps = pd.date_range(start=start, end=end, freq=freq)
-            if len(refined_range) > 1:
-                timestamps = timestamps[
-                    (timestamps.hour >= refined_range[0])
-                    & (timestamps.hour <= refined_range[-1])
-                ]
-            mix = mix.sel(time=mix["time"].isin(timestamps))
-    elif refined_range is not None and len(refined_range):
-        raise ValueError("general_range is required when refined_range is supplied")
-
-    if mix.sizes["time"] == 0:
-        raise ValueError("The requested time selection contains no available timestamps")
-
-    return mix
 
 
 def _validate_activity_share_builder_input(

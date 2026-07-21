@@ -3,6 +3,7 @@ import zipfile
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from shrecc import tyndp
 
@@ -59,6 +60,53 @@ def test_load_tyndp_country_mapping_accepts_csv_directory(tmp_path):
 
     assert countries.loc["ES00", "Country code"] == "ES"
     assert connections.loc["ES00-PT00", "Country to"] == "PT"
+
+
+def test_aggregate_tyndp_consumption_uses_measured_country_demand():
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("Demand [MW]\n(losses included)", "EE00", "demand-1"),
+            ("Demand [MW]\n(losses included)", "EE00RETE", "demand-2"),
+            ("Wind Onshore [MW]", "EE00", "wind"),
+        ],
+        names=["Category", "Country", "Code"],
+    )
+    production = pd.DataFrame([[70.0, 5.0, 20.0]], columns=columns)
+    country_codes = pd.Series({"EE00": "EE"})
+
+    result = tyndp._aggregate_tyndp_consumption(
+        production,
+        country_codes,
+    )
+
+    pd.testing.assert_frame_equal(
+        result,
+        pd.DataFrame([[75.0]], columns=pd.Index(["EE"], name="Country")),
+    )
+
+
+def test_aggregate_tyndp_trade_does_not_double_count_detail_series():
+    trade = pd.DataFrame(
+        [[10.0, 7.0, 3.0, 2.0]],
+        columns=[
+            "EE00-FI00",
+            "EE00-FI00 Real 1",
+            "FR00-IE00 Real 1",
+            "FR00-IE00 Concept 1",
+        ],
+    )
+    connections = pd.DataFrame(
+        {
+            "Country from": ["EE", "FR"],
+            "Country to": ["FI", "IE"],
+        },
+        index=["EE00-FI00", "FR00-IE00"],
+    )
+
+    result = tyndp._aggregate_tyndp_trade(trade, connections)
+
+    assert result.loc[0, ("FI", "EE")] == 10.0
+    assert result.loc[0, ("IE", "FR")] == 5.0
 
 
 def test_tyndp_scenario_paths_normalizes_inputs(tmp_path):
@@ -263,6 +311,109 @@ def _tiny_z_gross_with_zero_consumption_hour():
     )
 
 
+def _tiny_z_gross_with_trade():
+    times = pd.to_datetime(["2040-01-01 00:00"])
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("production mix", "A", "A", "Solar"),
+            ("production mix", "A", "A", "Wind"),
+            ("production mix", "B", "B", "Solar"),
+            ("production mix", "B", "B", "Wind"),
+            ("trade", "A", "B", "electricity"),
+            ("trade", "B", "A", "electricity"),
+        ],
+        names=["type", "country from", "country to", "source"],
+    )
+    return pd.DataFrame(
+        [[80.0, 20.0, 0.0, 60.0, 40.0, 0.0]],
+        index=times,
+        columns=columns,
+    )
+
+
+def test_consumption_results_retain_volumes_and_normalized_mix():
+    results = tyndp.consumption_results_from_z_gross(_tiny_z_gross_with_trade())
+
+    assert set(results.data_vars) == {
+        "production_volume",
+        "trade_volume",
+        "consumption_volume",
+        "consumption_mix_volume",
+        "consumption_mix",
+    }
+    assert results.attrs["solver"] == "country_trade_block"
+    assert results["consumption_volume"].attrs["unit"] == "MWh"
+
+    np.testing.assert_allclose(
+        results["consumption_volume"].sel(consumer_country=["A", "B"]),
+        [[60.0, 100.0]],
+    )
+    np.testing.assert_allclose(
+        results["consumption_mix_volume"].sel(
+            consumer_country="B",
+            source_country="A",
+            technology=["Solar", "Wind"],
+        ),
+        [[32.0, 8.0]],
+    )
+    np.testing.assert_allclose(
+        results["consumption_mix_volume"].sel(
+            consumer_country="B",
+            source_country="B",
+            technology=["Solar", "Wind"],
+        ),
+        [[0.0, 60.0]],
+    )
+    xr.testing.assert_allclose(
+        results["consumption_mix_volume"].sum(
+            ["source_country", "technology"]
+        ),
+        results["consumption_volume"],
+    )
+    np.testing.assert_allclose(
+        results["consumption_mix"].sum(["source_country", "technology"]),
+        1,
+    )
+
+
+def test_consumption_results_prefer_measured_tyndp_demand():
+    Z_gross = _tiny_z_gross_with_trade()
+    demand_columns = pd.MultiIndex.from_tuples(
+        [
+            ("consumption", "A", "A", tyndp.TYNDP_DEMAND_CATEGORY),
+            ("consumption", "B", "B", tyndp.TYNDP_DEMAND_CATEGORY),
+        ],
+        names=Z_gross.columns.names,
+    )
+    demand = pd.DataFrame([[55.0, 90.0]], index=Z_gross.index, columns=demand_columns)
+    Z_gross = pd.concat([Z_gross, demand], axis=1)
+
+    results = tyndp.consumption_results_from_z_gross(Z_gross)
+
+    np.testing.assert_allclose(
+        results["consumption_volume"].sel(consumer_country=["A", "B"]),
+        [[55.0, 90.0]],
+    )
+    assert results.attrs["consumption_volume_source"] == (
+        tyndp.TYNDP_DEMAND_CATEGORY
+    )
+    xr.testing.assert_allclose(
+        results["consumption_mix_volume"].sum(
+            ["source_country", "technology"]
+        ),
+        results["consumption_volume"],
+    )
+
+
+def test_reduced_solver_matches_legacy_full_matrix_result():
+    Z_gross = _tiny_z_gross_with_trade()
+
+    reduced = tyndp.consumption_mix_from_z_gross(Z_gross)
+    legacy = tyndp._legacy_consumption_mix_from_z_gross(Z_gross)
+
+    xr.testing.assert_allclose(reduced, legacy)
+
+
 def test_consumption_mix_zero_consumption_month_hour_average_fallback():
     Z_gross = _tiny_z_gross_with_zero_consumption_hour()
 
@@ -289,6 +440,21 @@ def test_consumption_mix_zero_consumption_month_hour_average_fallback():
 
     assert debug["zero_consumption_mask"].sum() == 1
     assert debug["zero_consumption_imputed"].iloc[0]["fallback"] == "month_hour"
+
+
+def test_imputed_consumption_mix_does_not_create_volume():
+    results = tyndp.consumption_results_from_z_gross(
+        _tiny_z_gross_with_zero_consumption_hour(),
+        zero_consumption="month_hour_average",
+    )
+
+    zero_hour = results.sel(
+        time="2040-01-03 00:00",
+        consumer_country="AL",
+    )
+    np.testing.assert_allclose(zero_hour["consumption_mix"].sum(), 1)
+    np.testing.assert_allclose(zero_hour["consumption_volume"], 0)
+    np.testing.assert_allclose(zero_hour["consumption_mix_volume"].sum(), 0)
 
 
 def test_consumption_mix_zero_consumption_still_raises_by_default():

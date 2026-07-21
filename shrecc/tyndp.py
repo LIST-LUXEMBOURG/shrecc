@@ -25,6 +25,9 @@ import pandas as pd
 import requests
 import xarray as xr
 
+from shrecc.solver import solve_consumption_system
+from shrecc.result_store import write_solved_consumption_result_cache
+
 TYNDP_SCENARIO_URL_ROOT = (
     "https://2024-data.entsos-tyndp-scenarios.eu/files/scenarios-outputs"
 )
@@ -39,6 +42,7 @@ TYNDP_SCENARIO_YEARS = {
     "NT": (2030, 2040),
 }
 TYNDP_CLIMATE_YEARS = (1995, 2008, 2009)
+TYNDP_DEMAND_CATEGORY = "Demand [MW] (losses included)"
 
 
 def build_z_gross_from_tyndp_pickles(
@@ -83,10 +87,11 @@ def build_z_gross_from_tyndp_pickles(
             aggregation steps.
 
     Returns:
-        Gross hourly supply table with rows indexed by time and columns indexed
+        Gross hourly system table with rows indexed by time and columns indexed
         by ``("type", "country from", "country to", "source")``. The ``type``
         level contains ``"production mix"`` for domestic production by
-        technology and ``"trade"`` for positive directional imports.
+        technology, ``"trade"`` for positive directional exchanges, and
+        ``"consumption"`` for measured country demand.
 
     Notes:
         This function is the reusable version of the parsing steps in
@@ -285,6 +290,10 @@ def _build_z_gross_from_tyndp_tables(
         concordance.columns,
         country_codes,
     )
+    consumption_agg = _aggregate_tyndp_consumption(
+        production,
+        country_codes,
+    )
 
     connections = connections[~connections.index.duplicated(keep="first")]
 
@@ -306,6 +315,16 @@ def _build_z_gross_from_tyndp_tables(
     )
     production_agg.columns = production_columns
 
+    consumption_columns = pd.MultiIndex.from_arrays(
+        [
+            consumption_agg.columns,
+            consumption_agg.columns,
+            [TYNDP_DEMAND_CATEGORY] * len(consumption_agg.columns),
+        ],
+        names=["country from", "country to", "source"],
+    )
+    consumption_agg.columns = consumption_columns
+
     trade_gross = pd.concat(
         [trade_directional],
         keys=["trade"],
@@ -317,9 +336,9 @@ def _build_z_gross_from_tyndp_tables(
 
     _log("Combining production and trade into Z_gross", verbose)
     Z_gross = pd.concat(
-        [production_agg, trade_gross],
+        [production_agg, trade_gross, consumption_agg],
         axis=1,
-        keys=["production mix", "trade"],
+        keys=["production mix", "trade", "consumption"],
         names=["type"],
     )
     _log(f"Built Z_gross with shape {Z_gross.shape}", verbose)
@@ -1156,6 +1175,43 @@ def _aggregate_tyndp_production(production, accepted_categories, country_codes):
     return production
 
 
+def _aggregate_tyndp_consumption(production, country_codes):
+    """Aggregate measured TYNDP electricity demand to country level."""
+    if not isinstance(production.columns, pd.MultiIndex):
+        raise TypeError("production columns must be a pandas MultiIndex")
+
+    category_level = (
+        "Category" if "Category" in production.columns.names else 0
+    )
+    country_level = "Country" if "Country" in production.columns.names else 1
+
+    categories = production.columns.get_level_values(category_level)
+    normalized_categories = (
+        pd.Index(categories)
+        .astype(str)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+    country_nodes = production.columns.get_level_values(country_level)
+    mapped_countries = _map_tyndp_nodes_to_countries(country_nodes, country_codes)
+
+    keep_columns = (
+        (normalized_categories == TYNDP_DEMAND_CATEGORY)
+        & mapped_countries.notna().to_numpy()
+    )
+    if not keep_columns.any():
+        raise ValueError(
+            f"TYNDP production table has no {TYNDP_DEMAND_CATEGORY!r} columns"
+        )
+
+    consumption = production.loc[:, keep_columns].copy()
+    consumption.columns = pd.Index(
+        mapped_countries.to_numpy()[keep_columns],
+        name="Country",
+    )
+    return consumption.T.groupby(level="Country", sort=True).sum().T
+
+
 def _map_tyndp_nodes_to_countries(nodes, country_codes):
     """Map TYNDP node labels to country codes with a conservative fallback."""
     nodes = pd.Index(nodes).astype(str)
@@ -1176,7 +1232,25 @@ def _map_tyndp_nodes_to_countries(nodes, country_codes):
 def _aggregate_tyndp_trade(trade, connections):
     """Aggregate TYNDP exchange lines to positive directional country flows."""
     trade = trade.copy()
-    trade.columns = _clean_tyndp_connection_labels(trade.columns)
+    raw_labels = pd.Index(trade.columns).astype(str)
+    cleaned_labels = _clean_tyndp_connection_labels(raw_labels)
+    detail_columns = raw_labels.str.contains(
+        r"\s*/?(?:Concept|Real)\s+\d+\s*$",
+        regex=True,
+    )
+    has_base_column = (
+        pd.Series(~detail_columns, index=cleaned_labels)
+        .groupby(level=0)
+        .transform("any")
+        .to_numpy()
+    )
+
+    # The unsuffixed series is the aggregate interconnector flow. Real/Concept
+    # series are components or alternatives and must not be added to it. Where
+    # no aggregate exists, retain and combine the available detail series.
+    keep_columns = (~detail_columns) | (~has_base_column)
+    trade = trade.loc[:, keep_columns]
+    trade.columns = cleaned_labels[keep_columns]
 
     mapping = connections.reindex(trade.columns)
     required_columns = ["Country from", "Country to"]
@@ -1242,7 +1316,242 @@ def _clean_tyndp_connection_labels(labels):
     )
 
 
+def consumption_results_from_z_gross(
+    Z_gross,
+    check=True,
+    return_debug=False,
+    zero_consumption="raise",
+    verbose=False,
+    volume_unit="MWh",
+    include_consumption_mix_volume=True,
+):
+    """Return consumption volumes and normalized mixes from ``Z_gross``.
+
+    This is the canonical result-oriented interface. The returned Dataset
+    retains raw production and trade volumes, measured TYNDP country demand,
+    consumption resolved by producing country and technology, and the
+    normalized consumption mix. For backward-compatible ``Z_gross`` inputs
+    without measured demand, country consumption is inferred from the physical
+    balance. ``consumption_mix_volume`` can be omitted to reduce memory use
+    when only normalized shares are required.
+    """
+    _log("Preparing canonical production and trade volumes", verbose)
+    production_volume, trade_volume = _solver_inputs_from_z_gross(Z_gross)
+    consumption_volume = _consumption_volume_from_z_gross(Z_gross)
+
+    _log("Solving hourly country trade systems", verbose)
+    results, debug = solve_consumption_system(
+        production_volume,
+        trade_volume,
+        consumption_volume=consumption_volume,
+        check=check,
+        zero_consumption=zero_consumption,
+        volume_unit=volume_unit,
+        include_consumption_mix_volume=include_consumption_mix_volume,
+    )
+    if consumption_volume is not None:
+        results.attrs["consumption_volume_source"] = TYNDP_DEMAND_CATEGORY
+        results["consumption_volume"].attrs["source_category"] = (
+            TYNDP_DEMAND_CATEGORY
+        )
+    _log(f"Built consumption results with sizes {dict(results.sizes)}", verbose)
+
+    if return_debug:
+        countries = results["consumption_mix"]["consumer_country"].to_index()
+        technologies = results["consumption_mix"]["technology"].to_index()
+        direct_production = debug["direct_production"]
+        debug.update(
+            {
+                "A_prod_3d": direct_production.transpose(0, 2, 1),
+                "A_trade_3d": debug["direct_trade"],
+                "country_total_ordered": pd.DataFrame(
+                    debug["node_supply_volume"],
+                    index=Z_gross.index,
+                    columns=countries,
+                ),
+                "countries": countries,
+                "activities": technologies,
+            }
+        )
+        return results, debug
+
+    return results
+
+
+def write_z_gross_consumption_cache(
+    Z_gross,
+    cache_dir,
+    *,
+    time_chunk_size=168,
+    check=True,
+    zero_consumption="raise",
+    volume_unit="MWh",
+    include_consumption_mix_volume=True,
+):
+    """Solve a TYNDP gross table in chunks and persist canonical results."""
+    production_volume, trade_volume = _solver_inputs_from_z_gross(Z_gross)
+    consumption_volume = _consumption_volume_from_z_gross(Z_gross)
+    return write_solved_consumption_result_cache(
+        production_volume,
+        trade_volume,
+        cache_dir,
+        consumption_volume=consumption_volume,
+        time_chunk_size=time_chunk_size,
+        check=check,
+        zero_consumption=zero_consumption,
+        volume_unit=volume_unit,
+        include_consumption_mix_volume=include_consumption_mix_volume,
+    )
+
+
 def consumption_mix_from_z_gross(
+    Z_gross,
+    check=True,
+    return_debug=False,
+    zero_consumption="raise",
+    verbose=False,
+):
+    """Calculate the normalized hourly consumption mix from ``Z_gross``.
+
+    This backward-compatible interface returns only ``consumption_mix``. Use
+    :func:`consumption_results_from_z_gross` to retain physical volumes too.
+    """
+    result = consumption_results_from_z_gross(
+        Z_gross,
+        check=check,
+        return_debug=return_debug,
+        zero_consumption=zero_consumption,
+        verbose=verbose,
+        include_consumption_mix_volume=False,
+    )
+    if return_debug:
+        results, debug = result
+        return results["consumption_mix"], debug
+    return result["consumption_mix"]
+
+
+def _solver_inputs_from_z_gross(Z_gross):
+    """Convert a TYNDP gross table to shared solver input arrays."""
+    if not isinstance(Z_gross, pd.DataFrame):
+        raise TypeError("Z_gross must be a pandas DataFrame")
+    if not isinstance(Z_gross.columns, pd.MultiIndex):
+        raise ValueError("Z_gross columns must be a MultiIndex")
+
+    required_levels = {"type", "country from", "country to", "source"}
+    missing_levels = required_levels.difference(Z_gross.columns.names)
+    if missing_levels:
+        raise ValueError(
+            "Z_gross columns are missing required levels: "
+            + ", ".join(sorted(missing_levels))
+        )
+    required_types = {"production mix", "trade"}
+    missing_types = required_types.difference(
+        Z_gross.columns.get_level_values("type")
+    )
+    if missing_types:
+        raise ValueError(
+            "Z_gross is missing required column types: "
+            + ", ".join(sorted(missing_types))
+        )
+
+    production = Z_gross["production mix"]
+    production_from = production.columns.get_level_values("country from")
+    production_to = production.columns.get_level_values("country to")
+    if not production_from.equals(production_to):
+        raise ValueError("Production volumes must be domestic")
+    production = production.T.groupby(
+        level=["country from", "source"],
+        sort=True,
+    ).sum().T
+
+    trade = Z_gross["trade"].droplevel("source", axis=1)
+    trade = trade.T.groupby(
+        level=["country from", "country to"],
+        sort=True,
+    ).sum().T
+
+    countries = (
+        production.columns.get_level_values("country from")
+        .unique()
+        .union(trade.columns.get_level_values("country from").unique())
+        .union(trade.columns.get_level_values("country to").unique())
+        .sort_values()
+    )
+    technologies = (
+        production.columns.get_level_values("source").unique().sort_values()
+    )
+
+    production_columns = pd.MultiIndex.from_product(
+        [countries, technologies],
+        names=["country from", "source"],
+    )
+    trade_columns = pd.MultiIndex.from_product(
+        [countries, countries],
+        names=["country from", "country to"],
+    )
+    production = production.reindex(columns=production_columns, fill_value=0)
+    trade = trade.reindex(columns=trade_columns, fill_value=0)
+
+    production_volume = xr.DataArray(
+        production.to_numpy().reshape(
+            len(Z_gross),
+            len(countries),
+            len(technologies),
+        ),
+        dims=("time", "producer_country", "technology"),
+        coords={
+            "time": Z_gross.index,
+            "producer_country": countries.to_numpy(),
+            "technology": technologies.to_numpy(),
+        },
+        name="production_volume",
+    )
+    trade_volume = xr.DataArray(
+        trade.to_numpy().reshape(
+            len(Z_gross),
+            len(countries),
+            len(countries),
+        ),
+        dims=("time", "exporter_country", "importer_country"),
+        coords={
+            "time": Z_gross.index,
+            "exporter_country": countries.to_numpy(),
+            "importer_country": countries.to_numpy(),
+        },
+        name="trade_volume",
+    )
+    return production_volume, trade_volume
+
+
+def _consumption_volume_from_z_gross(Z_gross):
+    """Return measured country demand when it is available in ``Z_gross``."""
+    if "consumption" not in Z_gross.columns.get_level_values("type"):
+        return None
+
+    consumption = Z_gross["consumption"]
+    consumption_from = consumption.columns.get_level_values("country from")
+    consumption_to = consumption.columns.get_level_values("country to")
+    if not consumption_from.equals(consumption_to):
+        raise ValueError("Consumption volumes must be domestic")
+
+    consumption = consumption.T.groupby(
+        level="country to",
+        sort=True,
+    ).sum().T
+    return xr.DataArray(
+        consumption.to_numpy(),
+        dims=("time", "consumer_country"),
+        coords={
+            "time": Z_gross.index,
+            "consumer_country": consumption.columns.to_numpy(),
+        },
+        name="consumption_volume",
+    )
+
+
+# Temporary full-matrix reference retained until both source pipelines have
+# passed representative equivalence tests against the reduced solver.
+def _legacy_consumption_mix_from_z_gross(
     Z_gross,
     check=True,
     return_debug=False,

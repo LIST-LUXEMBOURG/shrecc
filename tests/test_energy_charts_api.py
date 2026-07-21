@@ -5,13 +5,21 @@ import numpy as np
 import pandas.testing as pdt
 import requests
 from unittest.mock import patch, MagicMock, ANY
-from shrecc.download import (
+from shrecc.energy_charts import (
+    EnergyChartsDownloadError,
+    _call_energy_charts_with_retries,
     get_prod,
     get_trade,
     get_data,
     year_to_unix,
     cleaning_data,
 )
+
+
+@pytest.fixture(autouse=True)
+def avoid_api_retry_delays(monkeypatch):
+    """Keep mocked API tests independent of production retry delays."""
+    monkeypatch.setattr("shrecc.energy_charts.time.sleep", lambda _seconds: None)
 
 
 # ────────────────────────────────────────────────
@@ -54,7 +62,7 @@ def mock_prod_api_response():
     }
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_success(mock_session, mock_prod_api_response):
     # Mock the requests.Session().get().status_code and .text
     mock_response = MagicMock()
@@ -86,7 +94,7 @@ def test_get_prod_success(mock_session, mock_prod_api_response):
     assert set(techs) == {"Solar", "Wind", "Load", "Residual load"}
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_404(mock_session):
     """Test the get_prod function for a 404 response."""
     mock_response = MagicMock()
@@ -101,7 +109,7 @@ def test_get_prod_404(mock_session):
     assert exc_info.value.response.status_code == 404
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_400(mock_session):
     """Test the get_prod function for a 400 response."""
     mock_response = MagicMock()
@@ -116,7 +124,7 @@ def test_get_prod_400(mock_session):
     assert exc_info.value.response.status_code == 400
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_missing_load_column(mock_session, mock_prod_api_response):
     """Test the get_prod function when the 'Load' column is missing."""
     mock_prod_api_response = {
@@ -138,7 +146,7 @@ def test_get_prod_missing_load_column(mock_session, mock_prod_api_response):
     assert set(techs) == {"Solar", "Wind"}
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_with_rolling_and_cumul(mock_session, mock_prod_api_response):
     """Test the get_prod function with rolling and cumul parameters."""
     mock_response = MagicMock()
@@ -215,7 +223,7 @@ def mock_trade_api_response():
     }
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_trade_success(mock_session, mock_trade_api_response):
     """Test the get_trade function with a successful API response."""
     mock_response = MagicMock()
@@ -243,7 +251,7 @@ def test_get_trade_success(mock_session, mock_trade_api_response):
     assert regions == expected_columns
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_trade_404(mock_session):
     """Test the get_trade function for a 404 response."""
     mock_response = MagicMock()
@@ -261,7 +269,7 @@ def test_get_trade_404(mock_session):
 # ─────────────────────────────────────────────────────
 # Tests for 404 exceptions with realistic scenarios
 # ─────────────────────────────────────────────────────
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_404_bogus_year(mock_session):
     """Test get_prod with a bogus year (e.g., 1900) that should yield a 404."""
     start, end = year_to_unix(1900)  # Bogus year
@@ -277,7 +285,7 @@ def test_get_prod_404_bogus_year(mock_session):
     assert exc_info.value.response.status_code == 404
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_404_bogus_country_valid_year(mock_session):
     """Test get_prod with a bogus country but valid year (2021-2024) that should yield a 404."""
     start, end = year_to_unix(2023)  # Valid year in range 2021-2024
@@ -293,7 +301,7 @@ def test_get_prod_404_bogus_country_valid_year(mock_session):
     assert exc_info.value.response.status_code == 404
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_prod_404_bogus_year_and_country(mock_session):
     """Test get_prod with both bogus year and bogus country that should yield a 404."""
     start, end = year_to_unix(3000)  # Bogus year
@@ -309,7 +317,7 @@ def test_get_prod_404_bogus_year_and_country(mock_session):
     assert exc_info.value.response.status_code == 404
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_trade_404_bogus_year(mock_session):
     """Test get_trade with a bogus year (e.g., 1900) that should yield a 404."""
     start, end = year_to_unix(1900)  # Bogus year
@@ -325,7 +333,7 @@ def test_get_trade_404_bogus_year(mock_session):
     assert exc_info.value.response.status_code == 404
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_trade_404_bogus_country_valid_year(mock_session):
     """Test get_trade with a bogus country but valid year (2021-2024) that should yield a 404."""
     start, end = year_to_unix(2022)  # Valid year in range 2021-2024
@@ -341,7 +349,7 @@ def test_get_trade_404_bogus_country_valid_year(mock_session):
     assert exc_info.value.response.status_code == 404
 
 
-@patch("shrecc.download.requests.Session")
+@patch("shrecc.energy_charts.requests.Session")
 def test_get_trade_404_bogus_year_and_country(mock_session):
     """Test get_trade with both bogus year and bogus country that should yield a 404."""
     start, end = year_to_unix(3000)  # Bogus year
@@ -449,8 +457,8 @@ def mock_pickle(tmp_path):
     return filename, dummy_data
 
 
-@patch("shrecc.download.load_from_pickle")
-@patch("shrecc.download.cleaning_data")
+@patch("shrecc.energy_charts.load_from_pickle")
+@patch("shrecc.energy_charts.cleaning_data")
 def test_get_data_loads_existing_pickle(
     mock_cleaning, mock_load, tmp_path, mock_pickle
 ):
@@ -468,11 +476,11 @@ def test_get_data_loads_existing_pickle(
     assert result == "cleaned"
 
 
-@patch("shrecc.download.save_to_pickle")
-@patch("shrecc.download.cleaning_data")
-@patch("shrecc.download.get_trade")
-@patch("shrecc.download.get_prod")
-@patch("shrecc.download.load_from_pickle")
+@patch("shrecc.energy_charts.save_to_pickle")
+@patch("shrecc.energy_charts.cleaning_data")
+@patch("shrecc.energy_charts.get_trade")
+@patch("shrecc.energy_charts.get_prod")
+@patch("shrecc.energy_charts.load_from_pickle")
 @patch("pathlib.Path.exists")
 def test_get_data_downloads_and_saves(
     mock_path_exist,
@@ -509,11 +517,11 @@ def test_get_data_downloads_and_saves(
     assert result == "cleaned"
 
 
-@patch("shrecc.download.save_to_pickle")
-@patch("shrecc.download.cleaning_data")
-@patch("shrecc.download.get_trade")
-@patch("shrecc.download.get_prod")
-@patch("shrecc.download.load_from_pickle")
+@patch("shrecc.energy_charts.save_to_pickle")
+@patch("shrecc.energy_charts.cleaning_data")
+@patch("shrecc.energy_charts.get_trade")
+@patch("shrecc.energy_charts.get_prod")
+@patch("shrecc.energy_charts.load_from_pickle")
 @patch("pathlib.Path.exists")
 def test_get_data_retries_on_exception(
     mock_path_exist,
@@ -550,18 +558,18 @@ def test_get_data_retries_on_exception(
     result = get_data(2023, path_to_data=data_dir, max_retries=2, retry_delay=0)
 
     assert mock_get_prod.call_count >= 2
-    assert mock_get_trade.call_count >= 2
+    assert mock_get_trade.call_count >= 1
     assert mock_save.called
     mock_load.assert_not_called()
     assert mock_cleaning.called
     assert result == "cleaned"
 
 
-@patch("shrecc.download.save_to_pickle")
-@patch("shrecc.download.cleaning_data")
-@patch("shrecc.download.get_trade")
-@patch("shrecc.download.get_prod")
-@patch("shrecc.download.load_from_pickle")
+@patch("shrecc.energy_charts.save_to_pickle")
+@patch("shrecc.energy_charts.cleaning_data")
+@patch("shrecc.energy_charts.get_trade")
+@patch("shrecc.energy_charts.get_prod")
+@patch("shrecc.energy_charts.load_from_pickle")
 @patch("pathlib.Path.exists")
 def test_get_data_handles_failed_country(
     mock_path_exist,
@@ -581,10 +589,67 @@ def test_get_data_handles_failed_country(
     mock_cleaning.return_value = "cleaned"
 
     data_dir = tmp_path / "data"
-    get_data(2023, path_to_data=data_dir, max_retries=2, retry_delay=0)
+    with pytest.raises(EnergyChartsDownloadError, match="is incomplete"):
+        get_data(2023, path_to_data=data_dir, max_retries=2, retry_delay=0)
 
     captured = capsys.readouterr()
 
     mock_load.assert_not_called()
     assert mock_save.called
-    assert "Failed to fetch data" in captured.out
+    mock_cleaning.assert_not_called()
+    assert "request failed" in captured.out
+
+
+def test_energy_charts_retry_honors_retry_after(monkeypatch):
+    response = MagicMock(status_code=429, headers={"Retry-After": "7"})
+    rate_limit = requests.HTTPError("rate limited", response=response)
+    function = MagicMock(side_effect=[rate_limit, "downloaded"])
+    delays = []
+    monkeypatch.setattr("shrecc.energy_charts.time.sleep", delays.append)
+
+    result = _call_energy_charts_with_retries(
+        function,
+        country="de",
+        endpoint="production",
+        max_retries=2,
+        retry_delay=1,
+    )
+
+    assert result == "downloaded"
+    assert delays == [7]
+
+
+def test_get_data_resumes_only_missing_required_countries(
+    monkeypatch,
+    tmp_path,
+):
+    data_dir = tmp_path / "data"
+    cache = data_dir / "2023" / "prod_and_trade_data_2023.pkl"
+    cache.parent.mkdir(parents=True)
+    cached_data = {
+        "de": {
+            "production mix": pd.DataFrame(),
+            "load": pd.Series(dtype=float),
+            "trade": pd.DataFrame(),
+        }
+    }
+    pd.to_pickle(cached_data, cache)
+    monkeypatch.setattr("shrecc.energy_charts.ENERGY_CHARTS_COUNTRIES", ("DE", "FR"))
+    get_prod_mock = MagicMock(return_value=(pd.DataFrame(), pd.Series(dtype=float), []))
+    get_trade_mock = MagicMock(return_value=(pd.DataFrame(), []))
+    cleaning_mock = MagicMock(return_value="cleaned")
+    monkeypatch.setattr("shrecc.energy_charts.get_prod", get_prod_mock)
+    monkeypatch.setattr("shrecc.energy_charts.get_trade", get_trade_mock)
+    monkeypatch.setattr("shrecc.energy_charts.cleaning_data", cleaning_mock)
+
+    result = get_data(
+        2023,
+        path_to_data=data_dir,
+        required_countries=["DE", "FR"],
+        request_interval=0,
+    )
+
+    assert result == "cleaned"
+    assert {call.kwargs["country"] for call in get_prod_mock.call_args_list} == {"fr"}
+    saved = pd.read_pickle(cache)
+    assert set(saved) == {"de", "fr"}
