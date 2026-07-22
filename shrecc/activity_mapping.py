@@ -8,6 +8,7 @@ from shrecc.mapping import (
     DEFAULT_FALLBACK_ACTIVITY,
     activity_mix_to_database_table,
     filter_consumption_mix_time,
+    load_ecoinvent_mapping,
     map_consumption_mix_to_ecoinvent_activities,
 )
 
@@ -16,5 +17,6 @@ __all__ = (
     "DEFAULT_FALLBACK_ACTIVITY",
     "activity_mix_to_database_table",
     "filter_consumption_mix_time",
+    "load_ecoinvent_mapping",
     "map_consumption_mix_to_ecoinvent_activities",
 )

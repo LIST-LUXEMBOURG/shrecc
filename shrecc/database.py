@@ -9,20 +9,27 @@ from pathlib import Path
 import re
 
 import bw2data as bd
-import numpy as np
 import pandas as pd
 from bw2data.query import Filter, Query
 
+from shrecc._legacy_database import (
+    apply_mapping,
+    filter_by_countries,
+    filter_by_range,
+    filter_by_times,
+    load_time_series_data,
+    prepare_consumption_data,
+    tech_mapping,
+)
 from shrecc.mapping import (
     activity_mix_to_database_table,
+    load_ecoinvent_mapping as load_mapping_data,
     map_consumption_mix_to_ecoinvent_activities,
 )
 from shrecc.result_store import (
     MANIFEST_FILENAME,
     consumption_result_cache_path,
-    load_pickle as load_from_pickle,
     load_consumption_result_cache,
-    save_pickle as save_to_pickle,
 )
 
 UNUSED_SOURCE = "Import balance (physical)"
@@ -137,246 +144,6 @@ def _filt_canonical_consumption_results(
     )
 
 
-def load_mapping_data(mapping_location):
-    """
-    Load the mapping data from an Excel file.
-    mapping_collection can be either a string pointing to a full file, or a directory.
-    If it is a directory, it will assume that the file name is `el_map_all_norm.csv`
-
-    Args:
-        mapping_location (str or Path): a full filename as string or path to the scaled technology mapping.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
-    """
-    if isinstance(mapping_location, str):
-        mapping_file = Path(mapping_location)
-    elif isinstance(mapping_location, Path) and mapping_location.is_dir():
-        mapping_file = mapping_location / "el_map_all_norm.csv"
-    elif isinstance(mapping_location, Path) and mapping_location.is_file():
-        mapping_file = mapping_location
-    else:
-        # We will use the file included in the SHRECC.data module
-        mapping_file = mapping_location / "el_map_all_norm.csv"
-    df = pd.read_csv(
-        mapping_file,
-        index_col=[0, 1, 2, 3],
-        header=[0, 1],
-    )
-    return df
-
-
-def load_time_series_data(path_to_data, year):
-    """
-    Load the time series data from a pickle file and format it as a DataFrame.
-
-    Args:
-        path_to_data (str or Path): The path to the directory containing the time series data.
-        year (int): The year corresponding to the time series data.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the time series data, with levels reordered and sorted.
-    """
-    path_to_data = Path(path_to_data)
-    filename = path_to_data / f"{year}" / f"indices_{year}.pkl"
-    indices = load_from_pickle(filename)
-    Z_cons_sp = load_from_pickle(path_to_data / f"{year}" / f"Z_cons_{year}.pkl")
-    Z_cons = pd.DataFrame(
-        np.float32(Z_cons_sp.todense()),
-        index=indices["index"],
-        columns=indices["columns"],
-    )
-    return Z_cons.reorder_levels(["time", "source", "country"], axis=1).sort_index(
-        axis=1
-    )
-
-
-def prepare_consumption_data(Z_cons):
-    """
-    Prepare the consumption data by removing trade data and adjusting indices.
-
-    Args:
-        Z_cons (pd.DataFrame): The original consumption data DataFrame.
-
-    Returns:
-        pd.DataFrame: The prepared consumption data, with the trade data removed and indices swapped.
-    """
-    Z_cons = Z_cons.sort_index()
-
-    if "trade" in Z_cons.index.get_level_values("source"):
-        Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
-    else:
-        Z_cons_to_multiply = Z_cons.copy()
-    Z_cons_to_multiply.index.names = ["source", "geography_mix"]
-
-    return Z_cons_to_multiply.swaplevel()
-
-
-def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
-    """
-    Apply the technology mapping to the consumption data.
-
-    Args:
-        Z_cons_to_multiply (pd.DataFrame): The consumption data to be mapped.
-        el_map_all_norm (pd.DataFrame): The normalized mapping data.
-
-    Returns:
-        pd.DataFrame: The resulting DataFrame after applying the technology mapping.
-    """
-
-    # Changing data types to float32 significantly reduces the product time
-    el_map_to_multiply = el_map_all_norm.reindex(
-        Z_cons_to_multiply.index, axis=1
-    ).astype("float32")
-    el_map_to_multiply["NIE"] = el_map_all_norm["GB"][
-        el_map_to_multiply["NIE"].columns
-    ].astype("float32")
-    el_map_to_multiply["UK"] = el_map_all_norm["GB"][
-        el_map_to_multiply["UK"].columns
-    ].astype("float32")
-
-    el_map_to_multiply = el_map_to_multiply.fillna(0)
-    LCI_cons = el_map_to_multiply.dot(Z_cons_to_multiply)
-
-    if LCI_cons.isna().sum().sum():
-        return LCI_cons.fillna(0)
-
-    return LCI_cons
-
-
-def tech_mapping(year, path_to_data, path_to_mapping=None):
-    """
-    Main function to map the technologies and scale them to 1 kWh.
-
-    Args:
-        year (int): The year corresponding to the data.
-        path_to_data (str or Path): Root directory of the data.
-        path_to_mapping (str or Path): File with the mapping of the scaled technology mappings.
-                                        If None, it will use the mapping from the package.
-
-    Returns:
-        pd.DataFrame: A DataFrame with the scaled technology mappings.
-    """
-    now = datetime.now()
-    print(f"{now} Mapping technologies...")
-    if path_to_mapping:
-        el_map_all_norm = load_mapping_data(path_to_mapping)
-    else:
-        data_dir = files("shrecc.data")
-        el_map_all_norm = load_mapping_data(data_dir)
-    Z_cons = load_time_series_data(path_to_data, year)
-    Z_cons_to_multiply = prepare_consumption_data(Z_cons)
-    filename = Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl")
-    if filename.exists():
-        LCI_cons_scaled = load_from_pickle(filename)
-    else:
-        LCI_cons = apply_mapping(Z_cons_to_multiply, el_map_all_norm)
-        sum = LCI_cons.sum()
-        filename = Path(path_to_data / f"{year}" / f"Z_load_{year}.pkl")
-        load = load_from_pickle(filename)
-        load_difference_row = (
-            "RER",
-            "electricity, high voltage, European attribute mix",
-            "electricity, high voltage",
-            "kWh",
-        )
-
-        load_stacked = load.stack()
-        load_stacked.index.names = ["country", "time"]
-        load_stacked = load_stacked[load_stacked != 0]
-        merged = load_stacked.reset_index(name="load_value").merge(
-            sum.reset_index(), how="inner", on=["time", "country"]
-        )
-        merged.rename(columns={0: "sum"}, inplace=True)
-        merged["difference"] = merged["load_value"] - merged["sum"]
-        merged = merged[merged["difference"] > 0]
-        merged.set_index(["time", "source", "country"], inplace=True)
-
-        LCI_cons.sort_index(inplace=True)
-        LCI_cons.sort_index(axis=1, inplace=True)
-        LCI_cons.loc[load_difference_row] = merged["difference"]
-        LCI_cons.loc[load_difference_row].fillna(0, inplace=True)
-        LCI_cons_scaled = LCI_cons / LCI_cons.sum()
-        save_to_pickle(
-            LCI_cons_scaled,
-            Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl"),
-        )
-    now = datetime.now()
-    print(f"{now} Technologies mapped.")
-    return LCI_cons_scaled
-
-
-def filter_by_countries(dataframe, countries):
-    """
-    Filter the dataframe by selected countries.
-
-    Args:
-        dataframe (pd.DataFrame): The original dataframe containing data for multiple countries.
-        countries (list of str): A list of country codes to filter by.
-
-    Returns:
-        pd.DataFrame: A dataframe filtered by the specified countries.
-    """
-    if "country" not in dataframe.columns.names:
-        print("Couldnt find country to filter")
-        return
-
-    return dataframe.loc[
-        :, dataframe.columns.get_level_values("country").isin(countries)
-    ]
-
-
-def filter_by_times(dataframe, times):
-    """
-    Filter the dataframe by specific times.
-
-    Args:
-        dataframe (pd.DataFrame): The original dataframe containing data for multiple times.
-        times (list of str): A list of specific times to filter by.
-
-    Returns:
-        pd.DataFrame: A dataframe filtered by the specified times.
-    """
-    return dataframe.loc[:, dataframe.columns.get_level_values("time").isin(times)]
-
-
-def filter_by_range(dataframe, general_range, refined_range, freq):
-    """
-    Filter the dataframe by a general time range and optionally by a refined time range.
-
-    Args:
-        dataframe (pd.DataFrame): The original dataframe containing data.
-        general_range (list of str): The start and end of the general range to filter by (e.g., ['2023-06-01', '2023-06-30']).
-        refined_range (list of int): A list specifying the refined range of hours to filter within the general range.
-        freq (str): The frequency for generating timestamps (e.g., 'D' for daily).
-
-    Returns:
-        pd.DataFrame: A dataframe filtered by the specified time range and refined range.
-    """
-    df_filt = dataframe.loc[:, general_range[0] : general_range[1]]
-    if refined_range and len(refined_range) > 1:
-        timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq
-        )
-        timestamps_range = timestamp[
-            (timestamp.hour >= refined_range[0]) & (timestamp.hour <= refined_range[1])
-        ]
-        df_filt = df_filt.loc[
-            :,
-            pd.to_datetime(df_filt.columns.get_level_values("time")).isin(
-                timestamps_range
-            ),
-        ]
-    elif refined_range and len(refined_range) == 1:
-        timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq
-        )
-        df_filt = df_filt.loc[
-            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamp)
-        ]
-    return df_filt.T.groupby(level="country").mean().T
-
-
 def apply_cutoff(df_filt, cutoff, include_cutoff):
     """
     Apply a cutoff value to filter out smaller values in the dataframe and optionally include a "rest" category.
@@ -389,23 +156,20 @@ def apply_cutoff(df_filt, cutoff, include_cutoff):
     Returns:
         pd.DataFrame: A dataframe with values below the cutoff set to zero, optionally including a "rest" category.
     """
-    sums = []
-    for col in df_filt.columns:
-        select = df_filt.loc[:, col]
-        sum_smaller_than_cutoff = select[select.le(cutoff)].sum()
-        sums.append(sum_smaller_than_cutoff)
-    df_filt[df_filt < cutoff] = 0
-    if include_cutoff:
-        df_filt.loc[
-            (
-                "RER",
-                "market group for electricity, high voltage",
-                "electricity, high voltage",
-                "kWh",
-            ),
-            :,
-        ] = sums
-    return df_filt
+    cutoff_totals = df_filt.where(df_filt.le(cutoff), 0).sum(axis=0)
+    result = df_filt.mask(df_filt.lt(cutoff), 0)
+    if not include_cutoff:
+        return result
+
+    rest_row = (
+        "RER",
+        "market group for electricity, high voltage",
+        "electricity, high voltage",
+        "kWh",
+    )
+    rest = cutoff_totals.to_frame().T
+    rest.index = pd.MultiIndex.from_tuples([rest_row], names=result.index.names)
+    return pd.concat([result.drop(index=rest_row, errors="ignore"), rest])
 
 
 def setup_database(project_name, db_name):

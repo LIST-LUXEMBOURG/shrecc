@@ -6,7 +6,7 @@ import shutil
 
 import pandas as pd
 
-from shrecc.database import apply_cutoff, create_database, load_mapping_data
+from shrecc.database import apply_cutoff, create_database
 from shrecc.energy_charts import (
     data_processing as process_energy_charts_data,
     energy_charts_cached_countries,
@@ -14,6 +14,7 @@ from shrecc.energy_charts import (
 )
 from shrecc.mapping import (
     activity_mix_to_database_table,
+    load_ecoinvent_mapping,
     map_consumption_mix_to_ecoinvent_activities,
 )
 from shrecc.premise_mapping import (
@@ -284,7 +285,7 @@ class NewDatabase:
                 results["consumption_mix"] * results["consumption_volume"]
             ).assign_attrs(unit=results.attrs.get("volume_unit", "MWh"))
 
-        activity_mapping = load_mapping_data(Path(self.ecoinvent_mapping))
+        activity_mapping = load_ecoinvent_mapping(Path(self.ecoinvent_mapping))
         activity_mix = map_consumption_mix_to_ecoinvent_activities(
             results["consumption_mix"],
             activity_mapping,

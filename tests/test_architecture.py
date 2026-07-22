@@ -3,6 +3,7 @@ def test_legacy_module_names_reexport_canonical_functions():
     from shrecc import _legacy_treatment as legacy_treatment
     from shrecc import (
         activity_mapping,
+        database,
         download,
         energy_charts,
         mapping,
@@ -21,6 +22,7 @@ def test_legacy_module_names_reexport_canonical_functions():
         activity_mapping.map_consumption_mix_to_ecoinvent_activities
         is mapping.map_consumption_mix_to_ecoinvent_activities
     )
+    assert database.load_mapping_data is mapping.load_ecoinvent_mapping
     assert (
         treatment_fiona.build_z_gross_from_tyndp_scenario
         is tyndp.build_z_gross_from_tyndp_scenario

@@ -56,6 +56,7 @@ def test_load_mapping_data_basic(tmp_path):
     df_string = load_mapping_data(str(csv_file))
     # Check if both methods return the same DataFrame
     assert df.equals(df_string)
+    assert df.equals(load_mapping_data(str(tmp_path)))
 
 
 def test_load_mapping_data_file_not_found(tmp_path):
@@ -118,7 +119,9 @@ def test_load_time_series_data_basic(monkeypatch, tmp_path):
         else:
             raise ValueError("Unexpected file: " + str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", mock_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", mock_load_from_pickle
+    )
 
     df = load_time_series_data(tmp_path, year)
     # Check DataFrame shape and content
@@ -155,7 +158,9 @@ def test_load_time_series_data_file_not_found(monkeypatch, tmp_path):
     def fake_load_from_pickle(path):
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
     with pytest.raises(FileNotFoundError):
         load_time_series_data(tmp_path, 2023)
 
@@ -585,12 +590,15 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
     Z_cons = MagicMock(name="Z_cons")
     Z_cons_to_multiply = MagicMock(name="Z_cons_to_multiply")
     # Patch load_mapping_data, load_time_series_data, prepare_consumption_data
-    monkeypatch.setattr("shrecc.database.load_mapping_data", lambda _: el_map_all_norm)
     monkeypatch.setattr(
-        "shrecc.database.load_time_series_data", lambda path, year: Z_cons
+        "shrecc._legacy_database.load_mapping_data", lambda _: el_map_all_norm
     )
     monkeypatch.setattr(
-        "shrecc.database.prepare_consumption_data", lambda _: Z_cons_to_multiply
+        "shrecc._legacy_database.load_time_series_data", lambda path, year: Z_cons
+    )
+    monkeypatch.setattr(
+        "shrecc._legacy_database.prepare_consumption_data",
+        lambda _: Z_cons_to_multiply,
     )
     # if the file exists, we should remove it to ensure we test the saving functionality
     scaled_path = data_dir / "LCI_cons_scaled_2023.pkl"
@@ -615,7 +623,7 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
     lci_cons_data = [[1.0, 2.0], [3.0, 4.0]]
     LCI_cons = pd.DataFrame(lci_cons_data, index=index, columns=columns)
     # Patch apply_mapping to return LCI_cons
-    monkeypatch.setattr("shrecc.database.apply_mapping", lambda z, m: LCI_cons)
+    monkeypatch.setattr("shrecc._legacy_database.apply_mapping", lambda z, m: LCI_cons)
     # Patch load_from_pickle for Z_load_2023.pkl
     load = pd.DataFrame(
         [[10.0, 20.0], [30.0, 40.0]],
@@ -628,7 +636,9 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
             return load
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
     # Patch save_to_pickle to record call
     saved = {}
 
@@ -636,9 +646,9 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
         saved["obj"] = obj
         saved["path"] = path
 
-    monkeypatch.setattr("shrecc.database.save_to_pickle", fake_save_to_pickle)
+    monkeypatch.setattr("shrecc._legacy_database.save_to_pickle", fake_save_to_pickle)
     # Patch files to avoid importlib.resources.files
-    monkeypatch.setattr("shrecc.database.files", lambda pkg: tmp_path)
+    monkeypatch.setattr("shrecc._legacy_database.files", lambda pkg: tmp_path)
     # Call tech_mapping
     result = tech_mapping(year, tmp_path)
     # Should return a DataFrame
@@ -661,11 +671,11 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
     assert result.loc[load_difference_row].sum() == approx(1.3)
 
 
-@patch("shrecc.database.save_to_pickle")
-@patch("shrecc.database.load_mapping_data")
-@patch("shrecc.database.load_time_series_data")
-@patch("shrecc.database.prepare_consumption_data")
-@patch("shrecc.database.apply_mapping")
+@patch("shrecc._legacy_database.save_to_pickle")
+@patch("shrecc._legacy_database.load_mapping_data")
+@patch("shrecc._legacy_database.load_time_series_data")
+@patch("shrecc._legacy_database.prepare_consumption_data")
+@patch("shrecc._legacy_database.apply_mapping")
 def test_tech_mapping_if_file_exists(
     mock_apply_mapping,
     mock_consumption_data,
@@ -694,9 +704,11 @@ def test_tech_mapping_if_file_exists(
             return dummy_df
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
     # Patch files to avoid importlib.resources.files
-    monkeypatch.setattr("shrecc.database.files", lambda pkg: tmp_path)
+    monkeypatch.setattr("shrecc._legacy_database.files", lambda pkg: tmp_path)
     # Call tech_mapping
     result = tech_mapping(year, tmp_path)
     # Should return the dummy DataFrame and correctly called the functions
@@ -723,12 +735,16 @@ def test_tech_mapping_handles_empty_difference(monkeypatch, tmp_path):
         names=["source", "exch_name", "prod", "unit"],
     )
     LCI_cons = pd.DataFrame([[5.0]], index=index, columns=columns)
-    monkeypatch.setattr("shrecc.database.apply_mapping", lambda z, m: LCI_cons)
-    monkeypatch.setattr("shrecc.database.load_mapping_data", lambda path: None)
+    monkeypatch.setattr("shrecc._legacy_database.apply_mapping", lambda z, m: LCI_cons)
     monkeypatch.setattr(
-        "shrecc.database.load_time_series_data", lambda path, year: None
+        "shrecc._legacy_database.load_mapping_data", lambda path: None
     )
-    monkeypatch.setattr("shrecc.database.prepare_consumption_data", lambda z: None)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_time_series_data", lambda path, year: None
+    )
+    monkeypatch.setattr(
+        "shrecc._legacy_database.prepare_consumption_data", lambda z: None
+    )
     # load DataFrame with same value as LCI_cons.sum()
     load = pd.DataFrame([[5.0]], index=["FR"], columns=["2023-01-01 00:00:00"])
 
@@ -737,9 +753,13 @@ def test_tech_mapping_handles_empty_difference(monkeypatch, tmp_path):
             return load
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
-    monkeypatch.setattr("shrecc.database.save_to_pickle", lambda obj, path: None)
-    monkeypatch.setattr("shrecc.database.files", lambda pkg: tmp_path)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
+    monkeypatch.setattr(
+        "shrecc._legacy_database.save_to_pickle", lambda obj, path: None
+    )
+    monkeypatch.setattr("shrecc._legacy_database.files", lambda pkg: tmp_path)
     result = tech_mapping(year, tmp_path)
     # Should not add any new row for load_difference_row (difference <= 0)
     load_difference_row = (

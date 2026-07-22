@@ -112,7 +112,7 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
         "shrecc.pipeline.load_consumption_result_cache",
         MagicMock(return_value=results),
     )
-    monkeypatch.setattr("shrecc.pipeline.load_mapping_data", MagicMock())
+    monkeypatch.setattr("shrecc.pipeline.load_ecoinvent_mapping", MagicMock())
     monkeypatch.setattr(
         "shrecc.pipeline.map_consumption_mix_to_ecoinvent_activities",
         MagicMock(return_value=activity_mix),
@@ -196,7 +196,7 @@ def test_historical_create_repairs_cache_missing_required_country(
     )
     monkeypatch.setattr("shrecc.pipeline.get_energy_charts_data", download)
     monkeypatch.setattr("shrecc.pipeline.process_energy_charts_data", process)
-    monkeypatch.setattr("shrecc.pipeline.load_mapping_data", MagicMock())
+    monkeypatch.setattr("shrecc.pipeline.load_ecoinvent_mapping", MagicMock())
     monkeypatch.setattr(
         "shrecc.pipeline.map_consumption_mix_to_ecoinvent_activities",
         MagicMock(return_value=_activity_mix(2025)),

@@ -1,5 +1,7 @@
 """Shared consumption-mix filtering and background activity mapping."""
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -11,6 +13,27 @@ DEFAULT_FALLBACK_ACTIVITY = (
     "electricity, high voltage",
     "kWh",
 )
+
+
+def load_ecoinvent_mapping(mapping_location):
+    """Load the country and technology allocation table used by SHRECC.
+
+    ``mapping_location`` may point directly to a CSV file or to a directory
+    containing ``el_map_all_norm.csv``.
+    """
+    mapping_file = (
+        Path(mapping_location)
+        if isinstance(mapping_location, (str, Path))
+        else mapping_location
+    )
+    if mapping_file.is_dir():
+        mapping_file = mapping_file / "el_map_all_norm.csv"
+
+    return pd.read_csv(
+        mapping_file,
+        index_col=[0, 1, 2, 3],
+        header=[0, 1],
+    )
 
 
 def map_consumption_mix_to_ecoinvent_activities(
