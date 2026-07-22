@@ -1,5 +1,6 @@
 def test_legacy_module_names_reexport_canonical_functions():
     import shrecc
+    from shrecc import _legacy_treatment as legacy_treatment
     from shrecc import (
         activity_mapping,
         download,
@@ -15,6 +16,7 @@ def test_legacy_module_names_reexport_canonical_functions():
     assert download.get_data is energy_charts.get_data
     assert download.data_processing is energy_charts.data_processing
     assert treatment.data_processing is energy_charts.data_processing
+    assert treatment.calculate_results is legacy_treatment.calculate_results
     assert (
         activity_mapping.map_consumption_mix_to_ecoinvent_activities
         is mapping.map_consumption_mix_to_ecoinvent_activities

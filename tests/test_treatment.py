@@ -4,10 +4,7 @@ import numpy as np
 import pickle
 from scipy.sparse import csr_matrix, csc_matrix, coo_array
 from unittest.mock import patch
-from shrecc.treatment import (
-    data_processing,
-    save_to_pickle,
-    load_from_pickle,
+from shrecc._legacy_treatment import (
     add_missing_elements,
     create_block_diagonal_matrix,
     process_matrix,
@@ -16,6 +13,11 @@ from shrecc.treatment import (
     process_results_light,
     concatenate_results,
     calculate_Z_cons,
+)
+from shrecc.energy_charts import data_processing
+from shrecc.result_store import (
+    load_pickle as load_from_pickle,
+    save_pickle as save_to_pickle,
 )
 
 
@@ -55,7 +57,7 @@ def mock_data_df():
     return df
 
 
-@patch("shrecc.treatment.treating_data")
+@patch("shrecc._legacy_treatment.treating_data")
 def test_data_processing(mock_treating_data, tmp_path, mock_data_df):
     # Make treating_data do nothing
     mock_treating_data.return_value = None
@@ -456,11 +458,11 @@ def mock_treating_data_setup(tmp_path):
     }
 
 
-@patch("shrecc.treatment.calculate_Z_cons")
-@patch("shrecc.treatment.process_matrix")
-@patch("shrecc.treatment.concatenate_results")
-@patch("shrecc.treatment.process_results_light")
-@patch("shrecc.treatment.calculate_results")
+@patch("shrecc._legacy_treatment.calculate_Z_cons")
+@patch("shrecc._legacy_treatment.process_matrix")
+@patch("shrecc._legacy_treatment.concatenate_results")
+@patch("shrecc._legacy_treatment.process_results_light")
+@patch("shrecc._legacy_treatment.calculate_results")
 def test_treating_data_creates_expected_files(
     mock_calc_results,
     mock_proc_light,
@@ -616,7 +618,7 @@ def test_calculate_results_basic(calculate_results_setup):
     pd.testing.assert_frame_equal(results_load, expected_load)
 
 
-@patch("shrecc.treatment.spsolve")
+@patch("shrecc._legacy_treatment.spsolve")
 def test_calculate_results_loads_existing_pickles(
     mock_spsolve, calculate_results_setup
 ):
@@ -781,7 +783,7 @@ def mock_z_cons_setup(tmp_path):
     return L_series, output, Z_indices, filename
 
 
-@patch("shrecc.treatment.process_matrix")
+@patch("shrecc._legacy_treatment.process_matrix")
 def test_calculate_z_cons_basic(mock_process_matrix, mock_z_cons_setup):
     """Test that calculate_Z_cons computes, saves, and returns correct DataFrame when file does not exist."""
     L_series, output, Z_indices, filename = mock_z_cons_setup
@@ -836,7 +838,7 @@ def test_calculate_z_cons_loads_existing_sparse(mock_z_cons_setup):
     pd.testing.assert_frame_equal(result, expected_results)
 
 
-@patch("shrecc.treatment.process_matrix", new=lambda df, op, **kwargs: df)
+@patch("shrecc._legacy_treatment.process_matrix", new=lambda df, op, **kwargs: df)
 def test_calculate_z_cons_with_zero_output(mock_z_cons_setup):
     """Test calculate_Z_cons with output series of zeros."""
     L_series, output, Z_indices, filename = mock_z_cons_setup

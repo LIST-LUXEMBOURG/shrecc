@@ -117,7 +117,7 @@ def data_processing(
     while validating workflows that require the historical matrix files.
     """
     if legacy:
-        from shrecc.treatment import _legacy_data_processing
+        from shrecc._legacy_treatment import _legacy_data_processing
 
         return _legacy_data_processing(data_df, year, path_to_data=path_to_data)
 
