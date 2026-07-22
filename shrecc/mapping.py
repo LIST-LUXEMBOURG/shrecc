@@ -20,6 +20,14 @@ def load_ecoinvent_mapping(mapping_location):
 
     ``mapping_location`` may be an existing DataFrame, point directly to a CSV
     file, or point to a directory containing ``el_map_all_norm.csv``.
+
+    Args:
+        mapping_location: Allocation DataFrame, mapping CSV, or its directory.
+
+    Returns:
+        A copy of the supplied DataFrame or the mapping loaded from CSV. Rows
+        identify ecoinvent activities and columns identify country-technology
+        combinations.
     """
     if isinstance(mapping_location, pd.DataFrame):
         return mapping_location.copy()
@@ -56,6 +64,28 @@ def map_consumption_mix_to_ecoinvent_activities(
 
     Set ``return_mapping_gaps`` to return the detailed, pre-fallback shares by
     source country and technology alongside the mapped activity mix.
+
+    Args:
+        consumption_mix: Dimensionless xarray DataArray resolved by time,
+            consumer country, source country, and source technology.
+        activity_mapping: Ecoinvent allocation DataFrame returned by
+            :func:`load_ecoinvent_mapping`.
+        country_aliases: Optional source-to-ecoinvent country-code overrides.
+        fallback_activity: Four-item tuple containing fallback geography,
+            activity name, product, and unit. A ``None`` geography preserves
+            each source country; an explicit geography aggregates all gaps.
+        check: Verify that mapping does not over-allocate and that fallback
+            assignment conserves the complete input mix.
+        return_mapping_gaps: Also return detailed shares that had no direct
+            source-country and technology mapping.
+
+    Returns:
+        Mapped activity-mix DataArray. If ``return_mapping_gaps`` is true,
+        returns ``(activity_mix, mapping_gap)`` instead.
+
+    Raises:
+        TypeError: If ``activity_mapping`` is not a DataFrame.
+        ValueError: If required dimensions or mapping index levels are absent.
     """
     required_dims = {"source_country", "technology", "consumer_country"}
     missing_dims = required_dims.difference(consumption_mix.dims)
@@ -182,7 +212,22 @@ def mapping_gap_to_report(
     freq=None,
     atol=1e-12,
 ):
-    """Return mean fallback shares by source technology and consumer country."""
+    """Summarize detailed activity-mapping gaps for a selected period.
+
+    Args:
+        mapping_gap: Dimensionless xarray DataArray containing unmapped shares
+            with source-country, technology, and consumer-country dimensions.
+        countries: Optional consumer countries to include.
+        times: Optional exact timestamps to include.
+        general_range: Optional inclusive start and end timestamps.
+        refined_range: Optional inclusive hour range inside ``general_range``.
+        freq: Pandas frequency used to construct the refined selection.
+        atol: Ignore rows whose absolute values do not exceed this tolerance.
+
+    Returns:
+        DataFrame indexed by source country and technology, with consumer
+        countries as columns. Values are mean shares over the selected times.
+    """
     required_dims = {"source_country", "technology", "consumer_country"}
     missing_dims = required_dims.difference(mapping_gap.dims)
     if missing_dims:
@@ -227,7 +272,21 @@ def activity_mix_to_database_table(
     refined_range=None,
     freq=None,
 ):
-    """Aggregate a mapped activity mix to the existing database table shape."""
+    """Aggregate an activity mix into the table consumed by ``create_database``.
+
+    Args:
+        activity_mix: Dimensionless mapped xarray DataArray with activity and
+            consumer-country dimensions and activity metadata coordinates.
+        countries: Optional consumer countries to include.
+        times: Optional exact timestamps to include.
+        general_range: Optional inclusive start and end timestamps.
+        refined_range: Optional inclusive hour range inside ``general_range``.
+        freq: Pandas frequency used to construct the refined selection.
+
+    Returns:
+        DataFrame indexed by activity geography, name, product, and unit, with
+        one normalized electricity-mix column per consumer country.
+    """
     required_dims = {"activity", "consumer_country"}
     missing_dims = required_dims.difference(activity_mix.dims)
     if missing_dims:
@@ -278,7 +337,25 @@ def filter_consumption_mix_time(
     refined_range=None,
     freq=None,
 ):
-    """Apply the time-selection semantics used by ``filt_cutoff``."""
+    """Apply the time-selection semantics used by ``filt_cutoff``.
+
+    Exact ``times`` can be combined with ``general_range``. A
+    ``refined_range`` selects inclusive clock hours within ``general_range``
+    using timestamps generated at ``freq``.
+
+    Args:
+        mix: xarray DataArray or Dataset to select.
+        times: Optional exact timestamps to retain.
+        general_range: Optional inclusive start and end timestamps.
+        refined_range: Optional inclusive start and end hours.
+        freq: Pandas frequency used to construct the refined selection.
+
+    Returns:
+        The selected xarray object, retaining all non-time dimensions.
+
+    Raises:
+        ValueError: If the selection is inconsistent or contains no timestamps.
+    """
     has_time_filter = any(
         value is not None for value in (times, general_range, refined_range, freq)
     )

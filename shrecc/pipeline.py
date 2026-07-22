@@ -9,6 +9,7 @@ import pandas as pd
 
 from shrecc.database import apply_cutoff, create_database
 from shrecc.energy_charts import (
+    # Aliases distinguish orchestration dependencies from their implementations.
     data_processing as process_energy_charts_data,
     energy_charts_cached_countries,
     get_data as get_energy_charts_data,
@@ -43,14 +44,94 @@ VALID_SOURCES = {"auto", "energy_charts", "tyndp"}
 
 
 class NewDatabase:
-    """Build mapped electricity tables and write Brightway databases.
+    """Create consumption-based electricity inventories for Brightway.
 
-    ``create()`` performs source acquisition, graph solving, mapping, temporal
-    filtering, and cutoff application. ``write()`` is the only method that
-    changes a Brightway project.
+    In plain terms, this class answers: "Which technologies, in which
+    countries, supplied the electricity consumed here during the selected
+    hours?" It follows electricity through the interconnected country network,
+    maps the resulting technology shares to ecoinvent or premise activities,
+    and prepares one inventory for each requested consumer country.
 
-    The source defaults to ``"auto"``: TYNDP is selected for supported
-    prospective scenario years and Energy Charts for other years.
+    The workflow is deliberately split in two. :meth:`create` downloads or
+    reads source data, solves the electricity system, and prepares inspectable
+    in-memory tables. :meth:`write` then writes those tables to Brightway.
+    Calling :meth:`create` alone does not modify a Brightway project.
+
+    With ``source="auto"``, supported prospective years use ENTSO-E TYNDP
+    scenario data and other years use historical Energy Charts data.
+
+    Args:
+        years: One year or an iterable of years to model. Time selections are
+            reused at the corresponding dates when several years are supplied.
+        countries: Country codes for which consumption inventories are created,
+            for example ``["DE", "FR", "NL"]``.
+        project_name: Brightway project that receives the database when
+            :meth:`write` is called.
+        premise_db: Existing background database name. Despite the historical
+            parameter name, this can also be a regular ecoinvent database for
+            Energy Charts years. For several years, provide a ``{year: name}``
+            mapping or a string containing ``"{year}"``.
+        my_db_name: Name of the database to create. A year suffix is added
+            automatically for multi-year runs unless names are supplied as a
+            mapping or with a ``"{year}"`` placeholder.
+        scenario: TYNDP scenario code, such as ``"DE"``. Required whenever a
+            configured year uses TYNDP.
+        climate_year: Weather year used by TYNDP. Required for TYNDP years.
+        iam: IAM geography model used by premise, currently typically
+            ``"remind-eu"``.
+        general_range: Two timestamps defining an inclusive period. For a
+            multi-year run, their month, day, and time are reused in each year.
+        refined_range: Optional inclusive hour range within
+            ``general_range``, for example ``[10, 14]``.
+        freq: Pandas frequency used with ``refined_range``, usually ``"h"``.
+        times: Exact timestamps to select instead of ``general_range``.
+        source: ``"auto"``, ``"energy_charts"``, or ``"tyndp"``.
+        cutoff: Minimum activity share retained as an individual row.
+        include_cutoff: If true, combine shares below ``cutoff`` into a
+            residual high-voltage electricity activity.
+        strict: If true, :meth:`write` raises when a required background
+            activity cannot be matched uniquely after geographic fallbacks.
+        network: Include fixed electricity transmission and distribution
+            infrastructure exchanges in the written inventories.
+        zero_consumption: Treatment of zero-consumption TYNDP country-hours:
+            ``"keep_zero"``, ``"month_hour_average"``, or ``"raise"``.
+        include_consumption_mix_volume: Retain the resolved four-dimensional
+            consumption volumes as well as normalized shares. Disable this to
+            reduce memory and cache size when only inventory shares are needed.
+        data_dir: Optional local cache directory. The platform-specific SHRECC
+            user-data directory is used by default.
+        technology_mapping: Optional replacement TYNDP technology concordance.
+        country_mapping: Optional replacement TYNDP node and edge mappings.
+        ecoinvent_mapping: Optional replacement ecoinvent allocation table.
+        topology_files: Optional IAM-to-topology-file mapping used for premise
+            region lookup.
+        download: Permit missing source data to be downloaded.
+        engine: Spreadsheet engine used to read TYNDP workbooks.
+        check: Run conservation and consistency checks during calculation.
+        verbose: Print progress information.
+
+    After creation, intermediate and final objects remain available by year in
+    ``consumption_results``, ``activity_mixes``, and ``database_tables``. The
+    historical pre-cutoff diagnostics are retained in ``mapping_gap_reports``;
+    :meth:`mapping_report` returns a defensive copy. Successfully written
+    output names are recorded in ``written_database_names``.
+
+    Examples:
+        >>> electricity = NewDatabase(
+        ...     years=2025,
+        ...     countries=["DE", "FR"],
+        ...     project_name="my-project",
+        ...     premise_db="ecoinvent-3.11-cutoff",
+        ...     my_db_name="shrecc_2025",
+        ...     general_range=[
+        ...         "2025-06-01 00:00:00",
+        ...         "2025-06-30 23:00:00",
+        ...     ],
+        ... )
+        >>> electricity.create()
+        NewDatabase(years=[2025], sources={2025:energy_charts})
+        >>> electricity.table().columns.tolist()
+        ['DE', 'FR']
     """
 
     def __init__(
@@ -173,7 +254,18 @@ class NewDatabase:
         self.written_database_names = {}
 
     def create(self):
-        """Create mapped and filtered database tables for every configured year."""
+        """Prepare mapped inventory tables without changing Brightway.
+
+        Source data are acquired or loaded from cache, the interconnected
+        electricity system is solved, technologies are mapped to background
+        activities, the requested times are aggregated, and the cutoff is
+        applied. Existing results on this object are replaced, so calling this
+        method again rebuilds every configured year and can fill newly cached
+        source data.
+
+        Returns:
+            This ``NewDatabase`` instance, allowing method chaining.
+        """
         self.consumption_results.clear()
         self.activity_mixes.clear()
         self.exchange_geography_maps.clear()
@@ -192,7 +284,19 @@ class NewDatabase:
         return self
 
     def write(self):
-        """Write all created tables to their configured Brightway databases."""
+        """Write the prepared inventories to the configured Brightway project.
+
+        :meth:`create` is called automatically if not all configured years have
+        prepared tables. An existing output database with the same name is
+        replaced.
+
+        Returns:
+            This ``NewDatabase`` instance, allowing method chaining.
+
+        Raises:
+            ValueError: If ``strict=True`` and a required background activity
+                cannot be matched uniquely.
+        """
         if set(self.database_tables) != set(self.years):
             self.create()
 
@@ -209,21 +313,66 @@ class NewDatabase:
         return self
 
     def table(self, year=None):
-        """Return one mapped table, requiring ``year`` for multi-year runs."""
+        """Return the final database input table for one year.
+
+        Args:
+            year: Requested year. It may be omitted for a single-year object.
+
+        Returns:
+            DataFrame whose rows are background activities and whose columns
+            are consumer-country inventories. Values are electricity shares
+            after temporal aggregation and cutoff treatment.
+
+        Raises:
+            RuntimeError: If :meth:`create` has not prepared the table.
+            ValueError: If ``year`` is omitted for a multi-year object.
+        """
         year = self._resolve_result_year(year)
         if year not in self.database_tables:
             raise RuntimeError("create() must be called before accessing tables")
         return self.database_tables[year]
 
     def results(self, year=None):
-        """Return one canonical result Dataset."""
+        """Return production, trade, consumption, and mix results for one year.
+
+        Args:
+            year: Requested year. It may be omitted for a single-year object.
+
+        Returns:
+            Canonical xarray Dataset before activity mapping and cutoff.
+
+        Raises:
+            RuntimeError: If :meth:`create` has not prepared the results.
+            ValueError: If ``year`` is omitted for a multi-year object.
+        """
         year = self._resolve_result_year(year)
         if year not in self.consumption_results:
             raise RuntimeError("create() must be called before accessing results")
         return self.consumption_results[year]
 
     def mapping_report(self, year=None):
-        """Return pre-cutoff fallback shares by source technology and consumer."""
+        """Return source technologies that required fallback mapping.
+
+        The report is calculated after time selection but before cutoff. Rows
+        identify ``(source_country, technology)`` and columns identify consumer
+        countries. Each value is the mean share of that consumer's mix assigned
+        to a source-country high-voltage market because no direct activity
+        mapping was available.
+
+        TYNDP mappings are validated during creation and therefore return an
+        empty report instead of using this historical-data fallback.
+
+        Args:
+            year: Requested year. It may be omitted for a single-year object.
+
+        Returns:
+            DataFrame of dimensionless fallback shares. Modifying it does not
+            alter the report stored on this object.
+
+        Raises:
+            RuntimeError: If :meth:`create` has not prepared the report.
+            ValueError: If ``year`` is omitted for a multi-year object.
+        """
         year = self._resolve_result_year(year)
         if year not in self.mapping_gap_reports:
             raise RuntimeError("create() must be called before accessing reports")

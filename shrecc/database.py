@@ -58,7 +58,8 @@ def filt_cutoff(
         general_range (list of str): Selecting a general range, e.g. for the month of June
             general_range = ['2023-06-01 01:00:00', '2023-06-30 23:00:00']. Can be applied alone.
         refined_range (list of int): Refining range of general range, e.g. mornings of June (previously selected in general_range):
-            refined_range = [8, 12]. Can only be applied with general_range.
+            refined_range = [8, 12], in hours (24-hour format). Can only be
+            applied with general_range.
         freq (str): Days to be included, e.g. freq='D' selects calendar days,
             see https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#offset-aliases.
         cutoff (float): Cutoff value for technology values.
@@ -303,6 +304,16 @@ def map_known_inputs(
 
 
 def get_network_activities(eidb_name):
+    """Return fixed electricity-network exchanges for a background version.
+
+    Args:
+        eidb_name: Background database name. Version markers in the name select
+            the locations used by newer ecoinvent releases.
+
+    Returns:
+        List of dictionaries containing activity name, location, and exchange
+        amount per kilowatt hour of supplied electricity.
+    """
     activities = [
         "market for distribution network, electricity, low voltage",
         "market for transmission network, electricity, medium voltage",
