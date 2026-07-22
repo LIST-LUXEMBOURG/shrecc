@@ -9,7 +9,7 @@ import xarray as xr
 DEFAULT_COUNTRY_ALIASES = {"NIE": "GB", "UK": "GB"}
 DEFAULT_FALLBACK_ACTIVITY = (
     None,
-    "market for electricity, high voltage",
+    "electricity, high voltage, production mix",
     "electricity, high voltage",
     "kWh",
 )
@@ -58,9 +58,10 @@ def map_consumption_mix_to_ecoinvent_activities(
 ):
     """Map source-country technologies to ecoinvent activities.
 
-    By default, unmapped shares are assigned to the high-voltage market of
-    their source country. A fallback activity with an explicit geography can
-    still be supplied to aggregate all unmapped shares at that geography.
+    By default, unmapped shares are assigned to the high-voltage production
+    mix of their source country. This preserves national generation without
+    embedding network infrastructure. A fallback activity with an explicit
+    geography can still be supplied to aggregate all unmapped shares there.
 
     Set ``return_mapping_gaps`` to return the detailed, pre-fallback shares by
     source country and technology alongside the mapped activity mix.

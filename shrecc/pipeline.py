@@ -356,8 +356,8 @@ class NewDatabase:
         The report is calculated after time selection but before cutoff. Rows
         identify ``(source_country, technology)`` and columns identify consumer
         countries. Each value is the mean share of that consumer's mix assigned
-        to a source-country high-voltage market because no direct activity
-        mapping was available.
+        to a source-country high-voltage production mix because no direct
+        activity mapping was available.
 
         TYNDP mappings are validated during creation and therefore return an
         empty report instead of using this historical-data fallback.
@@ -548,9 +548,10 @@ class NewDatabase:
         )
         warnings.warn(
             f"Energy Charts activity mapping gaps for {year} were assigned "
-            "to source-country high-voltage markets. Mean fallback share by "
-            f"consumer: {consumer_summary}. Largest source-technology gaps: "
-            f"{gap_summary}. See mapping_report({year}) for the full report.",
+            "to source-country high-voltage production mixes. Mean fallback "
+            f"share by consumer: {consumer_summary}. Largest source-technology "
+            f"gaps: {gap_summary}. See mapping_report({year}) for the full "
+            "report.",
             stacklevel=4,
         )
 

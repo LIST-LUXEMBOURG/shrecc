@@ -70,7 +70,7 @@ def test_activity_mapping_allocates_known_shares_and_preserves_fallback():
     np.testing.assert_allclose(activity_mix.isel(time=0, activity=2), 0.4)
     assert (
         activity_mix["activity_name"].isel(activity=2).item()
-        == "market for electricity, high voltage"
+        == "electricity, high voltage, production mix"
     )
     assert activity_mix["geography"].isel(activity=2).item() == "DE"
 
@@ -94,7 +94,7 @@ def test_activity_mix_table_reuses_range_selection_and_averages_time():
         table.loc[
             (
                 "DE",
-                "market for electricity, high voltage",
+                "electricity, high voltage, production mix",
                 "electricity, high voltage",
                 "kWh",
             ),
