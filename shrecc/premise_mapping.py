@@ -9,11 +9,7 @@ import pandas as pd
 import xarray as xr
 
 from shrecc.mapping import filter_consumption_mix_time
-
-try:
-    from .tyndp import load_technology_concordance
-except ImportError:
-    from tyndp import load_technology_concordance
+from shrecc.tyndp import load_technology_concordance
 
 
 DEFAULT_PREMISE_IAM_MODELS = ("remind", "image", "remind-eu")
