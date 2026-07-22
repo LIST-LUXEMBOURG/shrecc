@@ -4,8 +4,18 @@ import xarray as xr
 
 from shrecc.mapping import (
     activity_mix_to_database_table,
+    load_ecoinvent_mapping,
     map_consumption_mix_to_ecoinvent_activities,
 )
+
+
+def test_load_ecoinvent_mapping_copies_dataframes():
+    mapping = pd.DataFrame({"value": [1.0]})
+
+    loaded = load_ecoinvent_mapping(mapping)
+
+    pd.testing.assert_frame_equal(loaded, mapping)
+    assert loaded is not mapping
 
 
 def _consumption_mix():

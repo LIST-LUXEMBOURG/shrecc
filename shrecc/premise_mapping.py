@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from shrecc.mapping import filter_consumption_mix_time
+from shrecc.mapping import filter_consumption_mix_time, load_ecoinvent_mapping
 from shrecc.tyndp import load_technology_concordance
 
 
@@ -19,16 +19,9 @@ DEFAULT_COUNTRY_SPECIFIC_PREMISE_ACTIVITIES = (
 )
 
 
-def _load_ecoinvent_mapping(ecoinvent_mapping):
+def _load_and_validate_ecoinvent_mapping(ecoinvent_mapping):
     """Load and validate the basic SHRECC ecoinvent mapping."""
-    if isinstance(ecoinvent_mapping, pd.DataFrame):
-        mapping = ecoinvent_mapping.copy()
-    else:
-        mapping = pd.read_csv(
-            ecoinvent_mapping,
-            index_col=[0, 1, 2, 3],
-            header=[0, 1],
-        )
+    mapping = load_ecoinvent_mapping(ecoinvent_mapping)
 
     if not isinstance(mapping.index, pd.MultiIndex):
         raise ValueError("ecoinvent_mapping rows must use a MultiIndex")
@@ -196,7 +189,7 @@ def build_country_activity_shares_from_ecoinvent_mapping(
         Values are not normalized; only their relative magnitude within each
         country and compatible technology is used downstream.
     """
-    mapping = _load_ecoinvent_mapping(ecoinvent_mapping)
+    mapping = _load_and_validate_ecoinvent_mapping(ecoinvent_mapping)
 
     country_activity_shares = (
         mapping.T.groupby(level=0).sum().T.groupby(level="activityName").sum()
@@ -241,7 +234,7 @@ def build_country_activity_presence_from_ecoinvent_mapping(
         columns. ``True`` means the activity exists as an ecoinvent row for
         that source country.
     """
-    mapping = _load_ecoinvent_mapping(ecoinvent_mapping)
+    mapping = _load_and_validate_ecoinvent_mapping(ecoinvent_mapping)
 
     rows = mapping.index.to_frame(index=False)
     presence = pd.crosstab(
@@ -449,7 +442,7 @@ def premise_activity_mix_to_database_table(
     if countries is not None:
         mix = mix.sel(consumer_country=list(countries))
 
-    mix = _filter_premise_activity_mix_time(
+    mix = filter_consumption_mix_time(
         mix,
         times=times,
         general_range=general_range,
@@ -511,23 +504,6 @@ def premise_activity_mix_to_database_table(
     table.columns.name = None
 
     return table
-
-
-def _filter_premise_activity_mix_time(
-    mix,
-    times=None,
-    general_range=None,
-    refined_range=None,
-    freq=None,
-):
-    """Backward-compatible wrapper around the shared time filter."""
-    return filter_consumption_mix_time(
-        mix,
-        times=times,
-        general_range=general_range,
-        refined_range=refined_range,
-        freq=freq,
-    )
 
 
 def _validate_activity_share_builder_input(

@@ -18,9 +18,12 @@ DEFAULT_FALLBACK_ACTIVITY = (
 def load_ecoinvent_mapping(mapping_location):
     """Load the country and technology allocation table used by SHRECC.
 
-    ``mapping_location`` may point directly to a CSV file or to a directory
-    containing ``el_map_all_norm.csv``.
+    ``mapping_location`` may be an existing DataFrame, point directly to a CSV
+    file, or point to a directory containing ``el_map_all_norm.csv``.
     """
+    if isinstance(mapping_location, pd.DataFrame):
+        return mapping_location.copy()
+
     mapping_file = (
         Path(mapping_location)
         if isinstance(mapping_location, (str, Path))
