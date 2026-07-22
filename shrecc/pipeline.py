@@ -24,6 +24,7 @@ from shrecc.premise_mapping import (
 from shrecc.result_store import (
     MANIFEST_FILENAME,
     consumption_result_cache_path,
+    get_package_user_data_dir,
     load_consumption_result_cache,
 )
 from shrecc.tyndp import (
@@ -368,8 +369,6 @@ class NewDatabase:
     def _data_root(self):
         if self.data_dir is not None:
             return self.data_dir
-        from shrecc.energy_charts import get_package_user_data_dir
-
         return Path(get_package_user_data_dir())
 
     def _tyndp_cache_dir(self):

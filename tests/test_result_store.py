@@ -8,10 +8,31 @@ import xarray as xr
 from shrecc.result_store import (
     CACHE_FORMAT,
     CACHE_VERSION,
+    get_package_user_data_dir,
     load_consumption_result_cache,
+    save_pickle,
     write_consumption_result_cache,
 )
 from shrecc.solver import solve_consumption_system
+
+
+def test_save_pickle_creates_parent_directories(tmp_path):
+    filename = tmp_path / "nested" / "value.pkl"
+
+    save_pickle({"value": 1}, filename)
+
+    assert filename.is_file()
+
+
+def test_get_package_user_data_dir_creates_directory(monkeypatch, tmp_path):
+    destination = tmp_path / "user-data"
+    monkeypatch.setattr(
+        "shrecc.result_store.appdirs.user_data_dir",
+        lambda _package_name: destination,
+    )
+
+    assert get_package_user_data_dir() == destination
+    assert destination.is_dir()
 
 
 def _result_chunks():

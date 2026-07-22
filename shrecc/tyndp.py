@@ -13,7 +13,6 @@ are then projected through the resolved trade network to attribute each unit of
 country-level consumption back to producing technologies and countries.
 """
 
-import pickle
 import zipfile
 import warnings
 from datetime import datetime
@@ -26,7 +25,11 @@ import requests
 import xarray as xr
 
 from shrecc.solver import solve_consumption_system
-from shrecc.result_store import write_solved_consumption_result_cache
+from shrecc.result_store import (
+    load_pickle as _load_pickle,
+    save_pickle as _save_pickle,
+    write_solved_consumption_result_cache,
+)
 from shrecc._legacy_tyndp import _legacy_consumption_mix_from_z_gross
 
 TYNDP_SCENARIO_URL_ROOT = (
@@ -979,21 +982,6 @@ def _extract_tyndp_workbook_from_zip(zip_file, workbook, verbose=False):
 
         with archive.open(archive_name) as source, workbook.open("wb") as target:
             target.write(source.read())
-
-
-def _load_pickle(filename):
-    """Load a pickled object from disk."""
-    with Path(filename).open("rb") as handle:
-        return pickle.load(handle)
-
-
-def _save_pickle(obj, filename):
-    """Save an object to a pickle file, creating parent directories if needed."""
-    filename = Path(filename)
-    filename.parent.mkdir(parents=True, exist_ok=True)
-
-    with filename.open("wb") as handle:
-        pickle.dump(obj, handle)
 
 
 def _read_excel_dataframe(filename, **kwargs):

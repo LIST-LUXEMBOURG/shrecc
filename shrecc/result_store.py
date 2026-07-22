@@ -5,6 +5,7 @@ import json
 import pickle
 from pathlib import Path
 
+import appdirs
 import pandas as pd
 import xarray as xr
 
@@ -18,7 +19,9 @@ CANONICAL_CACHE_DIRNAME = f"consumption_results_v{CACHE_VERSION}"
 
 def save_pickle(obj, filename):
     """Persist a Python object using the repository's legacy pickle format."""
-    with Path(filename).open("wb") as handle:
+    filename = Path(filename)
+    filename.parent.mkdir(parents=True, exist_ok=True)
+    with filename.open("wb") as handle:
         pickle.dump(obj, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
@@ -26,6 +29,13 @@ def load_pickle(filename):
     """Load a Python object from the repository's legacy pickle format."""
     with Path(filename).open("rb") as handle:
         return pickle.load(handle)
+
+
+def get_package_user_data_dir(package_name="shrecc"):
+    """Return the package user-data directory, creating it when necessary."""
+    destination = Path(appdirs.user_data_dir(package_name))
+    destination.mkdir(parents=True, exist_ok=True)
+    return destination
 
 
 def consumption_result_cache_path(data_root, year):

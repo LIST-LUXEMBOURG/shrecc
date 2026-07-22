@@ -9,6 +9,7 @@ def test_legacy_module_names_reexport_canonical_functions():
         energy_charts,
         mapping,
         premise_mapping,
+        result_store,
         treatment,
         treatment_fiona,
         tyndp,
@@ -18,6 +19,10 @@ def test_legacy_module_names_reexport_canonical_functions():
     assert download.get_data is energy_charts.get_data
     assert download.data_processing is energy_charts.data_processing
     assert treatment.data_processing is energy_charts.data_processing
+    assert (
+        energy_charts.get_package_user_data_dir
+        is result_store.get_package_user_data_dir
+    )
     assert treatment.calculate_results is legacy_treatment.calculate_results
     assert (
         activity_mapping.map_consumption_mix_to_ecoinvent_activities

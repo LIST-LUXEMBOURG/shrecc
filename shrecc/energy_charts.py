@@ -3,14 +3,12 @@
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
 import json
-import os
 import time
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
 from zoneinfo import ZoneInfo  # Only available in Python 3.9+
 
-import appdirs
 import pandas as pd
 import requests
 import xarray as xr
@@ -18,6 +16,7 @@ from tqdm import tqdm
 
 from shrecc.result_store import (
     consumption_result_cache_path,
+    get_package_user_data_dir,
     load_pickle as load_from_pickle,
     save_pickle as save_to_pickle,
     write_solved_consumption_result_cache,
@@ -773,18 +772,3 @@ def cleaning_data(data, data_dir):
         axis=1,
     )
     return P
-
-
-def get_package_user_data_dir(package_name="shrecc"):
-    """
-    Get the user data dir through appdirs.
-    If it doesn't exist, it will create it.
-
-    Args:
-        package_name (str): the name of the package
-    Returns
-        Path : the existing or newly created directory.
-    """
-    destination_directory = appdirs.user_data_dir(package_name)
-    os.makedirs(destination_directory, exist_ok=True)
-    return destination_directory
