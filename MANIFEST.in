@@ -1,3 +1,1 @@
-include shrecc/data/*csv
-include shrecc/data/*json
-include shrecc/data/*xlsx
+recursive-include shrecc/data *.csv *.json

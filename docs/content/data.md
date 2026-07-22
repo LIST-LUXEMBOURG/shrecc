@@ -1,49 +1,68 @@
 # SHRECC data
 
-shrecc requires 2 types of data:
+SHRECC keeps small, version-controlled mapping resources inside the Python
+package and stores downloaded or generated time series in a user-data cache.
+This distinction lets installed packages remain reproducible without bundling
+large scenario workbooks or solved hourly arrays.
 
-+ The time series of the electricity mixes
-+ Mapping data
+## Packaged mapping data
 
-## Mapping data
+The default resources are available through the `shrecc.data` package:
 
-The package is configured to load the mapping data from within the package itself.
-The data is under the `shrecc.data` subdirectory.
-
+```text
+shrecc/data/
+|-- el_map_all_norm.csv
+|-- el_map_all_norm_w_ned.csv
+|-- generation_units_by_country.csv
+|-- techs_agg.json
+`-- tyndp/
+    |-- remind-eu-topology.json
+    |-- tyndp_activities.csv
+    |-- tyndp_connections.csv
+    `-- tyndp_countries.csv
 ```
-shrecc
-├── data
-│   ├── el_map_all_norm.csv
-│   ├── generation_units_by_country.csv
-│   └── techs_agg.json
-├── database.py
-├── download.py
-├── __init__.py
-└── treatment.py
 
-```
+- `el_map_all_norm.csv` contains country-specific ecoinvent activity shares for
+  established electricity technologies.
+- `el_map_all_norm_w_ned.csv` retains the alternative NED.nl production labels
+  prepared for filling gaps in Netherlands Energy Charts data. It is not selected
+  automatically by the current Energy Charts adapter.
+- `generation_units_by_country.csv` records the technologies represented in
+  each historical country mix.
+- `techs_agg.json` harmonizes Energy Charts production and trade labels.
+- `tyndp_activities.csv` maps TYNDP technologies to compatible premise or
+  ecoinvent electricity activities.
+- `tyndp_connections.csv` and `tyndp_countries.csv` map TYNDP nodes and links to
+  country codes.
+- `remind-eu-topology.json` supplies the default REMIND-EU regional topology.
 
-When calling the {py:func}`shrecc.database.filt_cutoff` function, if no value is passed to the `mapping_root` argument, the data is taken from the package, but the user can supply a path to a directory that contains a subdirectory `data` that has the necessary files (`el_map_all_norm.csv`, etc.)
+Custom paths can be passed to `NewDatabase` through `technology_mapping`,
+`country_mapping`, `ecoinvent_mapping`, and `topology_files`.
 
+The editable `mapping_sources/electricity_sources.xlsx` workbook is retained in
+the repository for maintaining the Energy Charts and NED.nl concordances, but it
+is not installed as package data.
 
-### el_map_all_norm.csv
+## Downloaded and generated data
 
-This CSV file contains a mapping of ENTSO-E technology categories to their corresponding ecoinvent classifications.
+By default, `NewDatabase` stores source data beneath the platform-specific
+`appdirs.user_data_dir("shrecc")` directory. Supplying `data_dir` selects a
+different cache root.
 
-### generation_units_by_country.csv
+Historical runs cache Energy Charts API responses and canonical solved results.
+Prospective runs cache downloaded TYNDP archives, extracted workbooks, and parsed
+production and trade tables. These files are local data and are not package
+resources.
 
-This csv file is a binary matrix indicating which electricity generation technologies are present in each country, used to support technology mapping and data filtering.
+Canonical solved results are written as compressed time chunks with a manifest.
+Only chunks intersecting the requested date or timestamp selection are loaded.
+The resulting xarray Dataset can contain:
 
-### techs_agg.json
+- `production_volume`
+- `trade_volume`
+- `consumption_volume`
+- `consumption_mix`
+- `consumption_mix_volume`
 
-This JSON file provides a mapping of various electricity generation and trade technology labels to consistent names.
-
-## Time series
-
-This data is pre-calculated, and stored in the [shrecc_data](https://git.list.lu/shrecc_project/shrecc_data) repository.
-
-The user must download this data to the `shrecc` appdirs user directory.
-This can be done with the {py:func}`shrecc.download.download_shrecc_data`, and it will automatically place the data in the right place.
-The user can also manually download the data.
-
-The data can also be generated on the fly. Please look at the example notebook for how to do this.
+The volume variables retain physical quantities for analysis and visualization;
+`consumption_mix` is normalized for mapping to life-cycle inventory activities.

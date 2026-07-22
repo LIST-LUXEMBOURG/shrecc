@@ -4,26 +4,26 @@ Simple Hourly Resolution Electricity Consumption Calculation
 
 ## Description
 
-SHRECC package is a python package directly compatible with Brightway2 or Brightway2.5 to create time-aware electricity databases. For any given year and countries (check availability on https://api.energy-charts.info/), download and prepare data for low-voltage electricity consumption.
+SHRECC creates time-resolved electricity-consumption databases for Brightway.
+It uses measured Energy Charts data for historical years and ENTSO-E TYNDP
+scenario data for prospective years, while exposing the same workflow for both.
 
-## SHRECC features
+## Features
 
-- **High-resolution electricity mixes** – Generates electricity life cycle inventories (LCIs) with **hourly** resolution, enhancing accuracy for life cycle assessment (LCA).
-- **Brightway2/2.5 compatibility** – Seamlessly integrates with Brightway, allowing direct use in existing LCA models.
-- **Dynamic temporal representation** – Users can select electricity mixes by **hour, month, or season**, addressing fluctuations in renewable energy generation and consumption.
-- **Automated data retrieval** – Pulls electricity production, trade, and consumption data from the **Energy Charts API**, ensuring up-to-date datasets.
-- **Ecoinvent matching** – Aligns with **ecoinvent classifications**, converting from ENTSO-E datasets.
-- **User-controlled updates** – Enables **one-time or recurring** updates, allowing continuous tracking of electricity mix evolution over time.
-- **Optimized impact assessments** – Helps reduce uncertainty and improve **decision-making for electricity-intensive technologies** by considering real-time electricity mix variations.
-
-## FIONA features
-
-- This branch uses [TYNDP output files](https://2024.entsos-tyndp-scenarios.eu/download/) as a source to produce hourly consumption mixes
-- The pipeline is [TYNDP Excel file] -> [Z_gross flow matrix (production and trade)] -> [consumption_mix], you can recreate it at `notebooks/fiona_example.ipynb`
+- Hourly production, trade, consumption-volume, and consumption-mix results.
+- One reduced country-network solver shared by Energy Charts and TYNDP data.
+- Historical ecoinvent allocation and prospective premise/IAM mapping.
+- Hourly, daily, weekly, monthly, and explicit timestamp selections.
+- Inspectable intermediate results before any Brightway database is changed.
+- Resumable source acquisition and compressed, time-chunked result caches.
+- Brightway 2 and 2.5 database writing through `NewDatabase`.
 
 ## Documentation
 
 The full documentation is hosted at [Read the Docs page for shrecc](https://shrecc.readthedocs.io/en/latest/)
+
+The internal data flow and module responsibilities are summarized in
+[docs/architecture.md](https://git.list.lu/shrecc_project/SHRECC/-/blob/main/docs/architecture.md).
 
 ## Installation
 
@@ -38,6 +38,12 @@ You can install it with pip (or any other pypi compatible util like `uv` or `poe
 pip install shrecc
 ```
 
+Install optional premise geography support or the notebook environment with:
+
+```
+pip install "shrecc[premise,notebooks]"
+```
+
 ### From source 
 
 To install shrecc from source, clone the code and then install the package and if necessary the dependencies manually.
@@ -45,8 +51,41 @@ To install shrecc from source, clone the code and then install the package and i
 
 ## Usage
 
-You can find usage examples in the Jupyter notebook in this repo: [notebooks/example.ipynb](notebooks/example.ipynb)
-_and_ in the documentation at [read the docs](https://shrecc.readthedocs.io/en/latest/content/notebooks/notebooks.html).
+You can find a usage example in the repository's
+[unified usage notebook](https://git.list.lu/shrecc_project/SHRECC/-/blob/main/notebooks/shrecc_usage.ipynb)
+_and_ in the documentation at [read the docs](https://shrecc.readthedocs.io/en/latest/content/notebooks/).
+
+The harmonized historical/prospective workflow is available through
+`NewDatabase`:
+
+```python
+from shrecc import NewDatabase
+
+electricity = NewDatabase(
+    scenario="DE",
+    years=[2035, 2040, 2050],
+    climate_year=2009,
+    premise_db={
+        2035: "premise-remind-eu-2035",
+        2040: "premise-remind-eu-2040",
+        2050: "premise-remind-eu-2050",
+    },
+    my_db_name="shrecc_tyndp_DE_june_noon",
+    countries=["ES", "FR", "DE", "IT", "PT", "BE", "NL", "LU", "AT", "CH"],
+    general_range=["2040-06-01 00:00:00", "2040-06-30 23:00:00"],
+    refined_range=[10, 14],
+    freq="h",
+    project_name="SHRECCei311",
+    source="auto",
+)
+
+electricity.create()
+electricity.write()
+```
+
+For a multi-year run, the month/day/time selection is reused for each year.
+Intermediate canonical results and mapped tables remain available on the class
+instance through `results(year)` and `table(year)`.
 
 
 ## Contributing

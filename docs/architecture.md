@@ -43,12 +43,14 @@ Brightway database
   construction/writing.
 - `pipeline.py`: The public `NewDatabase` workflow and inspectable pipeline
   state.
-- `treatment.py`: Temporary legacy full-matrix implementation retained for
-  validation. New code should not depend on it.
+- `treatment.py`: Compatibility facade for historical treatment imports.
+- `_legacy_treatment.py`, `_legacy_database.py`, and `_legacy_tyndp.py`:
+  isolated reference implementations retained for compatibility and regression
+  comparison. New code should not depend on them.
 
-`download.py` and `activity_mapping.py` are compatibility facades for older
-imports. They contain no independent implementation and can be removed during a
-future breaking cleanup.
+`download.py`, `activity_mapping.py`, `treatment.py`, and `treatment_fiona.py`
+are compatibility facades for older imports. They contain no independent core
+implementation and can be removed in a future breaking release.
 
 ## Design Rules
 

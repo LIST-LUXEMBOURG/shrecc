@@ -131,7 +131,7 @@ dmypy.json
 .pyre/
 
 # Local/generated data
-data/**/*.pkl
-data/**/*.zip
-data/**/*.xlsb
+/data/
+/figures/
+/notebooks/export/
 notebooks/data/
