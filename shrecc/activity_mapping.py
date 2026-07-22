@@ -10,6 +10,7 @@ from shrecc.mapping import (
     filter_consumption_mix_time,
     load_ecoinvent_mapping,
     map_consumption_mix_to_ecoinvent_activities,
+    mapping_gap_to_report,
 )
 
 __all__ = (
@@ -19,4 +20,5 @@ __all__ = (
     "filter_consumption_mix_time",
     "load_ecoinvent_mapping",
     "map_consumption_mix_to_ecoinvent_activities",
+    "mapping_gap_to_report",
 )

@@ -8,8 +8,8 @@ import xarray as xr
 
 DEFAULT_COUNTRY_ALIASES = {"NIE": "GB", "UK": "GB"}
 DEFAULT_FALLBACK_ACTIVITY = (
-    "RER",
-    "electricity, high voltage, European attribute mix",
+    None,
+    "market for electricity, high voltage",
     "electricity, high voltage",
     "kWh",
 )
@@ -46,11 +46,16 @@ def map_consumption_mix_to_ecoinvent_activities(
     country_aliases=None,
     fallback_activity=DEFAULT_FALLBACK_ACTIVITY,
     check=True,
+    return_mapping_gaps=False,
 ):
     """Map source-country technologies to ecoinvent activities.
 
-    Unmapped shares are assigned to ``fallback_activity``, reproducing the
-    historical SHRECC fallback without first constructing ``Z_cons``.
+    By default, unmapped shares are assigned to the high-voltage market of
+    their source country. A fallback activity with an explicit geography can
+    still be supplied to aggregate all unmapped shares at that geography.
+
+    Set ``return_mapping_gaps`` to return the detailed, pre-fallback shares by
+    source country and technology alongside the mapped activity mix.
     """
     required_dims = {"source_country", "technology", "consumer_country"}
     missing_dims = required_dims.difference(consumption_mix.dims)
@@ -92,7 +97,7 @@ def map_consumption_mix_to_ecoinvent_activities(
             mapping_country,
             axis=1,
             level=0,
-        ).reindex(columns=technologies, fill_value=0)
+        ).reindex(columns=technologies, fill_value=0).fillna(0)
         weights[country_idx] = country_mapping.to_numpy(dtype=float).T
 
     weights_xr = xr.DataArray(
@@ -111,11 +116,40 @@ def map_consumption_mix_to_ecoinvent_activities(
     )
     mapped_total = activity_mix.sum("activity")
     input_total = consumption_mix.sum(["source_country", "technology"])
-    unmapped = (input_total - mapped_total).clip(min=0)
+    mapping_coverage = weights_xr.sum("activity")
+    mapping_gaps = (
+        consumption_mix * (1 - mapping_coverage).clip(min=0)
+    ).rename("mapping_gap")
+    mapping_gaps.attrs["unit"] = "dimensionless"
 
-    fallback = unmapped.expand_dims(activity=[len(activity_mapping)])
+    fallback_geography, fallback_name, fallback_product, fallback_unit = (
+        fallback_activity
+    )
+    if fallback_geography is None:
+        fallback = mapping_gaps.sum("technology").rename(
+            source_country="activity"
+        )
+        fallback_countries = [
+            aliases.get(country, country) for country in source_countries
+        ]
+        fallback = fallback.assign_coords(
+            activity=np.arange(
+                len(activity_mapping),
+                len(activity_mapping) + len(fallback_countries),
+            )
+        )
+        fallback_index = [
+            (country, fallback_name, fallback_product, fallback_unit)
+            for country in fallback_countries
+        ]
+    else:
+        fallback = mapping_gaps.sum(
+            ["source_country", "technology"]
+        ).expand_dims(activity=[len(activity_mapping)])
+        fallback_index = [tuple(fallback_activity)]
+
     activity_mix = xr.concat([activity_mix, fallback], dim="activity")
-    activity_index = list(activity_mapping.index) + [tuple(fallback_activity)]
+    activity_index = list(activity_mapping.index) + fallback_index
     activity_mix = activity_mix.assign_coords(
         geography=("activity", [item[0] for item in activity_index]),
         activity_name=("activity", [item[1] for item in activity_index]),
@@ -133,7 +167,55 @@ def map_consumption_mix_to_ecoinvent_activities(
             atol=1e-8,
         )
 
+    if return_mapping_gaps:
+        return activity_mix, mapping_gaps
     return activity_mix
+
+
+def mapping_gap_to_report(
+    mapping_gap,
+    *,
+    countries=None,
+    times=None,
+    general_range=None,
+    refined_range=None,
+    freq=None,
+    atol=1e-12,
+):
+    """Return mean fallback shares by source technology and consumer country."""
+    required_dims = {"source_country", "technology", "consumer_country"}
+    missing_dims = required_dims.difference(mapping_gap.dims)
+    if missing_dims:
+        raise ValueError(
+            "mapping_gap is missing required dimensions: "
+            + ", ".join(sorted(missing_dims))
+        )
+
+    selected = mapping_gap
+    if countries is not None:
+        selected = selected.sel(consumer_country=list(countries))
+    selected = filter_consumption_mix_time(
+        selected,
+        times=times,
+        general_range=general_range,
+        refined_range=refined_range,
+        freq=freq,
+    )
+    if "time" in selected.dims:
+        selected = selected.mean("time")
+
+    report = selected.to_dataframe(name="share").reset_index()
+    report = (
+        report.groupby(
+            ["source_country", "technology", "consumer_country"],
+            dropna=False,
+        )["share"]
+        .sum()
+        .unstack("consumer_country", fill_value=0)
+    )
+    report.columns.name = None
+    report = report.loc[report.abs().gt(atol).any(axis=1)]
+    return report.sort_index()
 
 
 def activity_mix_to_database_table(

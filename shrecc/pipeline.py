@@ -3,6 +3,7 @@
 from importlib.resources import files
 from pathlib import Path
 import shutil
+import warnings
 
 import pandas as pd
 
@@ -16,6 +17,7 @@ from shrecc.mapping import (
     activity_mix_to_database_table,
     load_ecoinvent_mapping,
     map_consumption_mix_to_ecoinvent_activities,
+    mapping_gap_to_report,
 )
 from shrecc.premise_mapping import (
     PremiseConsumptionMixMapper,
@@ -165,6 +167,8 @@ class NewDatabase:
         self.consumption_results = {}
         self.activity_mixes = {}
         self.exchange_geography_maps = {}
+        self.mapping_gaps = {}
+        self.mapping_gap_reports = {}
         self.database_tables = {}
         self.written_database_names = {}
 
@@ -173,6 +177,8 @@ class NewDatabase:
         self.consumption_results.clear()
         self.activity_mixes.clear()
         self.exchange_geography_maps.clear()
+        self.mapping_gaps.clear()
+        self.mapping_gap_reports.clear()
         self.database_tables.clear()
         self.written_database_names.clear()
 
@@ -215,6 +221,13 @@ class NewDatabase:
         if year not in self.consumption_results:
             raise RuntimeError("create() must be called before accessing results")
         return self.consumption_results[year]
+
+    def mapping_report(self, year=None):
+        """Return pre-cutoff fallback shares by source technology and consumer."""
+        year = self._resolve_result_year(year)
+        if year not in self.mapping_gap_reports:
+            raise RuntimeError("create() must be called before accessing reports")
+        return self.mapping_gap_reports[year].copy()
 
     def _create_energy_charts_year(self, year):
         data_root = self._data_root()
@@ -287,11 +300,23 @@ class NewDatabase:
             ).assign_attrs(unit=results.attrs.get("volume_unit", "MWh"))
 
         activity_mapping = load_ecoinvent_mapping(Path(self.ecoinvent_mapping))
-        activity_mix = map_consumption_mix_to_ecoinvent_activities(
+        activity_mix, mapping_gaps = map_consumption_mix_to_ecoinvent_activities(
             results["consumption_mix"],
             activity_mapping,
             check=self.check,
+            return_mapping_gaps=True,
         )
+        mapping_report = mapping_gap_to_report(
+            mapping_gaps,
+            countries=self.countries,
+            general_range=general_range,
+            refined_range=self.refined_range,
+            freq=self.freq,
+            times=times,
+        )
+        self.mapping_gaps[year] = mapping_gaps
+        self.mapping_gap_reports[year] = mapping_report
+        self._warn_mapping_gaps(year, mapping_report)
         table = activity_mix_to_database_table(
             activity_mix,
             countries=self.countries,
@@ -350,7 +375,35 @@ class NewDatabase:
             times=times,
         )
         self.exchange_geography_maps[year] = exchange_geography_map
+        self.mapping_gap_reports[year] = pd.DataFrame(
+            columns=self.countries,
+            dtype=float,
+        )
         self._store_year(year, results, activity_mix, table)
+
+    def _warn_mapping_gaps(self, year, report):
+        if report.empty:
+            if self.verbose:
+                print(f"No activity mapping gaps found for {year}")
+            return
+
+        consumer_totals = report.sum(axis=0).sort_values(ascending=False)
+        consumer_summary = ", ".join(
+            f"{country} {share:.1%}"
+            for country, share in consumer_totals.head(5).items()
+        )
+        largest_gap = report.max(axis=1).sort_values(ascending=False)
+        gap_summary = ", ".join(
+            f"{country}/{technology} {share:.1%}"
+            for (country, technology), share in largest_gap.head(5).items()
+        )
+        warnings.warn(
+            f"Energy Charts activity mapping gaps for {year} were assigned "
+            "to source-country high-voltage markets. Mean fallback share by "
+            f"consumer: {consumer_summary}. Largest source-technology gaps: "
+            f"{gap_summary}. See mapping_report({year}) for the full report.",
+            stacklevel=4,
+        )
 
     def _store_year(self, year, results, activity_mix, table):
         self.consumption_results[year] = results

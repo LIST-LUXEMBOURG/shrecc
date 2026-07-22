@@ -115,7 +115,12 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
     monkeypatch.setattr("shrecc.pipeline.load_ecoinvent_mapping", MagicMock())
     monkeypatch.setattr(
         "shrecc.pipeline.map_consumption_mix_to_ecoinvent_activities",
-        MagicMock(return_value=activity_mix),
+        MagicMock(
+            return_value=(
+                activity_mix,
+                xr.zeros_like(results["consumption_mix"]),
+            )
+        ),
     )
     monkeypatch.setattr(
         "shrecc.pipeline.activity_mix_to_database_table",
@@ -137,6 +142,7 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
     assert database.sources == {2025: "energy_charts"}
     assert database.table().equals(table)
     assert "consumption_mix_volume" in database.results()
+    assert database.mapping_report().empty
     xr.testing.assert_allclose(
         database.results()["consumption_mix_volume"].sum(
             ["source_country", "technology"]
@@ -199,7 +205,12 @@ def test_historical_create_repairs_cache_missing_required_country(
     monkeypatch.setattr("shrecc.pipeline.load_ecoinvent_mapping", MagicMock())
     monkeypatch.setattr(
         "shrecc.pipeline.map_consumption_mix_to_ecoinvent_activities",
-        MagicMock(return_value=_activity_mix(2025)),
+        MagicMock(
+            return_value=(
+                _activity_mix(2025),
+                xr.zeros_like(complete["consumption_mix"]),
+            )
+        ),
     )
     monkeypatch.setattr(
         "shrecc.pipeline.activity_mix_to_database_table",
