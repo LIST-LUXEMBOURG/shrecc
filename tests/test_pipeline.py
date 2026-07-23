@@ -296,6 +296,7 @@ def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch)
         eidb_name="premise-remind-eu-2040",
         network=True,
         strict=False,
+        year=year,
     )
 
 

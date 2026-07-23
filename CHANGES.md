@@ -27,6 +27,8 @@ mapping behavior.
   inspected before Brightway is modified.
 - Add a minimal getting-started notebook and an expanded historical and
   prospective analysis notebook.
+- Record the model year in written foreground activity names and Brightway
+  activity metadata.
 
 ### Changed
 
@@ -47,6 +49,8 @@ mapping behavior.
 - Harmonize temporal filtering and cutoff handling for hourly, daily, weekly,
   monthly, range-based, and explicit timestamp selections.
 - Replace runtime TYNDP XLSX concordances with packaged CSV/JSON resources.
+- Read TYNDP `.xlsb` workbooks with `calamine` and remove the `pyxlsb` runtime
+  dependency.
 - Move downloaded and generated data to local user-data caches and keep only
   required mapping resources inside the installed package.
 

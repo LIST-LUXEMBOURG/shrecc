@@ -1917,6 +1917,32 @@ def test_create_activity_dict_empty_dataframe():
     assert activities == {}
 
 
+@patch("shrecc.database.get_network_activities", return_value=[])
+def test_create_activity_dict_adds_year_to_name_and_metadata(
+    mock_get_network_activities,
+    known_inputs_fixture,
+):
+    index = pd.MultiIndex.from_tuples(
+        [("FR", "Hydro", "electricity, high voltage", "kWh")],
+        names=["source", "exch_name", "prod", "unit"],
+    )
+    dataframe = pd.DataFrame({"FR": [1.0]}, index=index)
+
+    activities = create_activity_dict(
+        dataframe,
+        known_inputs_fixture,
+        {},
+        "test_db",
+        year=2040,
+    )
+
+    activity = activities[("test_db", "electricity 0")]
+    assert activity["name"] == "Electricity mix in FR, 2040"
+    assert activity["year"] == 2040
+    assert activity["exchanges"][0]["name"] == activity["name"]
+    mock_get_network_activities.assert_called_once_with("test_db")
+
+
 # ────────────────────────────────────────────────────────────
 # Tests for: create_database() — requires multiple sub-tests
 # ────────────────────────────────────────────────────────────
@@ -1984,6 +2010,7 @@ def test_create_database_with_network_true(
         known_inputs_network,
         "db",
         eidb_name="eidb",
+        year=None,
     )
     mock_db.write.assert_called_once_with(activities)
 
@@ -2027,6 +2054,7 @@ def test_create_database_with_network_false(
         None,
         "db",
         eidb_name="eidb",
+        year=None,
     )
     mock_db.write.assert_called_once_with(activities)
 

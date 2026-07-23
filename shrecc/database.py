@@ -365,6 +365,7 @@ def create_activity_dict(
     known_inputs_network,
     db_name,
     eidb_name=None,
+    year=None,
 ):
     """
     Creates a dictionary of activities for the BW database based on the filtered dataframe and known inputs.
@@ -376,19 +377,27 @@ def create_activity_dict(
         db_name (str): The name of the BW database.
         eidb_name (str): Background database name used to select version-specific
             network activities. Defaults to ``db_name`` for backwards compatibility.
+        year (int, optional): Model year stored on each activity and included in
+            its name. If a time-indexed column already contains the year, the
+            name is left unchanged to avoid repeating it.
 
     Returns:
         dict: A dictionary containing activities to be written to the BW2 database.
     """
     activities = {}
+    activity_year = int(year) if year is not None else None
     for i, col in enumerate(dataframe_filt.columns):
         if dataframe_filt.columns.nlevels > 1:
             time, country = col
             activity = f"{time} Electricity mix"
             name = f"{activity} in {country}"
+            name_contains_year = str(activity_year) in str(time)
         else:
             country = col
             name = f"Electricity mix in {country}"
+            name_contains_year = False
+        if activity_year is not None and not name_contains_year:
+            name = f"{name}, {activity_year}"
         code = f"electricity {i}"
         bd_version = bd.__version__
         if not isinstance(bd_version, str):
@@ -409,6 +418,8 @@ def create_activity_dict(
             "type": act_type,
             "exchanges": [],
         }
+        if activity_year is not None:
+            act["year"] = activity_year
         # Add the production exchange
         act["exchanges"].append(
             {
@@ -527,6 +538,7 @@ def create_database(
     eidb_name,
     network=True,
     strict=False,
+    year=None,
 ):
     """
     Creates an "ecoinvent-like" BW database based on a previously filtered dataframe.
@@ -541,6 +553,8 @@ def create_database(
             strings ``"True"`` and ``"False"`` are also accepted.
         strict (bool): Raise before writing if any required background activity
             cannot be matched uniquely.
+        year (int, optional): Model year included in foreground activity names
+            and stored as activity metadata.
 
     Returns:
         None
@@ -561,6 +575,7 @@ def create_database(
         known_inputs_network,
         db_name,
         eidb_name=eidb_name,
+        year=year,
     )
     elec_db = setup_database(project_name, db_name)
     elec_db.write(activities)

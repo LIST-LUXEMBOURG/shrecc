@@ -132,7 +132,7 @@ def build_z_gross_from_tyndp_excel(
     technology_sheet="concordance",
     countries_sheet="countries",
     connections_sheet="connections",
-    engine="pyxlsb",
+    engine="calamine",
     production_pickle=None,
     trade_pickle=None,
     verbose=False,
@@ -159,7 +159,7 @@ def build_z_gross_from_tyndp_excel(
         connections_sheet: Sheet name in the SHRECC/FIONA country mapping
             workbook for cross-border connection mappings.
         engine: Excel engine passed to :func:`pandas.read_excel`. The original
-            TYNDP workbook used in the notebook is ``.xlsb``, so ``"pyxlsb"``
+            TYNDP workbook used in the notebook is ``.xlsb``, so ``"calamine"``
             is the default. Use ``None`` to let pandas infer the engine for
             ordinary ``.xlsx`` files.
         production_pickle: Optional path where the raw extracted production
@@ -200,7 +200,7 @@ def read_tyndp_excel_tables(
     excel_file,
     production_sheet="Hourly Market Data emarket",
     trade_sheet="Crossborder exchanges",
-    engine="pyxlsb",
+    engine="calamine",
     production_pickle=None,
     trade_pickle=None,
     verbose=False,
@@ -368,7 +368,7 @@ def build_z_gross_from_tyndp_scenario(
     technology_sheet="concordance",
     countries_sheet="countries",
     connections_sheet="connections",
-    engine="pyxlsb",
+    engine="calamine",
     verbose=False,
 ):
     """Build ``Z_gross`` for a TYNDP scenario, using cached files when possible.
@@ -565,7 +565,7 @@ def consumption_mix_from_tyndp_scenario(
     check=True,
     return_debug=False,
     zero_consumption="raise",
-    engine="pyxlsb",
+    engine="calamine",
     verbose=False,
 ):
     """Run the full TYNDP scenario-to-consumption-mix pipeline.
@@ -671,7 +671,7 @@ def consumption_mix_from_tyndp_excel(
     check=True,
     return_debug=False,
     zero_consumption="raise",
-    engine="pyxlsb",
+    engine="calamine",
     verbose=False,
 ):
     """Run the full TYNDP workbook-to-consumption-mix pipeline.

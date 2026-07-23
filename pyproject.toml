@@ -42,7 +42,6 @@ dependencies = [
    "packaging",
    "tqdm",
    "xarray",
-   "pyxlsb",
    "python-calamine>=0.6.2",
 ]
 license="MIT"

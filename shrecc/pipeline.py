@@ -58,7 +58,9 @@ class NewDatabase:
     Calling :meth:`create` alone does not modify a Brightway project.
 
     With ``source="auto"``, supported prospective years use ENTSO-E TYNDP
-    scenario data and other years use historical Energy Charts data.
+    scenario data and other years use historical Energy Charts data. Multi-year
+    runs write one foreground database per year; each foreground activity
+    records that year in its name and Brightway metadata.
 
     Args:
         years: One year or an iterable of years to model. Time selections are
@@ -284,8 +286,9 @@ class NewDatabase:
         """Write the prepared inventories to the configured Brightway project.
 
         :meth:`create` is called automatically if not all configured years have
-        prepared tables. An existing output database with the same name is
-        replaced.
+        prepared tables. Each configured year is written to its own output
+        database, replacing an existing database with the same name.
+        Foreground activity names and metadata record the modeled year.
 
         Returns:
             This ``NewDatabase`` instance, allowing method chaining.
@@ -305,6 +308,7 @@ class NewDatabase:
                 eidb_name=self.background_databases[year],
                 network=self.network,
                 strict=self.strict,
+                year=year,
             )
             self.written_database_names[year] = self.database_names[year]
         return self

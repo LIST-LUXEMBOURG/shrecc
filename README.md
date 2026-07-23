@@ -17,6 +17,8 @@ scenario data for prospective years, while exposing the same workflow for both.
 - Inspectable intermediate results before any Brightway database is changed.
 - Resumable source acquisition and compressed, time-chunked result caches.
 - Brightway 2 and 2.5 database writing through `NewDatabase`.
+- Multi-year runs with a separate, year-labelled foreground database for each
+  requested year.
 
 ## Documentation
 
@@ -85,9 +87,15 @@ electricity.create()
 electricity.write()
 ```
 
-For a multi-year run, the month/day/time selection is reused for each year.
+For a multi-year run, the month/day/time selection is reused for each year and
+`write()` creates one foreground database per year. A year suffix is added to
+`my_db_name` automatically unless explicit year-specific names are supplied.
+Foreground activity names and metadata also record their model year.
+
 Intermediate canonical results and mapped tables remain available on the class
-instance through `results(year)` and `table(year)`.
+instance through `results(year)` and `table(year)`. Use
+`mapping_report(year)` to inspect any historical technologies assigned to a
+country-specific high-voltage fallback activity.
 
 
 ## Contributing
