@@ -102,7 +102,10 @@ def _energy_charts_data():
 
 
 def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
-    results = _canonical_results(2025)
+    results = _canonical_results(2025).reindex(
+        consumer_country=["FR", "DE"],
+        fill_value=1.0,
+    )
     activity_mix = _activity_mix(2025)
     table = _database_table()
     monkeypatch.setattr("shrecc.pipeline.get_energy_charts_data", MagicMock())
@@ -113,14 +116,17 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
         MagicMock(return_value=results),
     )
     monkeypatch.setattr("shrecc.pipeline.load_ecoinvent_mapping", MagicMock())
+    map_activities = MagicMock(
+        return_value=(
+            activity_mix,
+            xr.zeros_like(
+                results["consumption_mix"].sel(consumer_country=["FR"])
+            ),
+        )
+    )
     monkeypatch.setattr(
         "shrecc.pipeline.map_consumption_mix_to_ecoinvent_activities",
-        MagicMock(
-            return_value=(
-                activity_mix,
-                xr.zeros_like(results["consumption_mix"]),
-            )
-        ),
+        map_activities,
     )
     monkeypatch.setattr(
         "shrecc.pipeline.activity_mix_to_database_table",
@@ -141,6 +147,14 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
 
     assert database.sources == {2025: "energy_charts"}
     assert database.table().equals(table)
+    assert database.results()["consumer_country"].to_numpy().tolist() == [
+        "FR",
+        "DE",
+    ]
+    assert (
+        map_activities.call_args.args[0]["consumer_country"].to_numpy().tolist()
+        == ["FR"]
+    )
     assert "consumption_mix_volume" in database.results()
     assert database.mapping_report().empty
     xr.testing.assert_allclose(
@@ -298,6 +312,45 @@ def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch)
         strict=False,
         year=year,
     )
+
+
+def test_prospective_create_reports_countries_absent_from_tyndp_before_solving(
+    monkeypatch,
+):
+    year = 2035
+    times = pd.date_range(f"{year}-01-01", periods=2, freq="h")
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("production mix", "FR", "FR", "Wind"),
+            ("trade", "FR", "DE", "electricity"),
+        ],
+        names=["type", "country from", "country to", "source"],
+    )
+    Z_gross = pd.DataFrame(1.0, index=times, columns=columns)
+    solve = MagicMock()
+    monkeypatch.setattr(
+        "shrecc.pipeline.build_z_gross_from_tyndp_scenario",
+        MagicMock(return_value=Z_gross),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.consumption_results_from_z_gross",
+        solve,
+    )
+
+    database = NewDatabase(
+        scenario="DE",
+        years=year,
+        climate_year=2009,
+        bg_db_name="premise-remind-eu-2035",
+        my_db_name="shrecc_DE_2035",
+        countries=["FR", "MD", "UA"],
+        time_range=[f"{year}-01-01 00:00", f"{year}-01-01 01:00"],
+        project_name="project",
+    )
+
+    with pytest.raises(ValueError, match=r"requested countries: MD, UA"):
+        database.create()
+    solve.assert_not_called()
 
 
 def test_multi_year_names_and_time_ranges_are_expanded():

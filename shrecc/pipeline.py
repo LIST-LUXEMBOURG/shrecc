@@ -450,8 +450,11 @@ class NewDatabase:
             ).assign_attrs(unit=results.attrs.get("volume_unit", "MWh"))
 
         activity_mapping = load_ecoinvent_mapping(Path(self.ecoinvent_mapping))
+        selected_consumption_mix = results["consumption_mix"].sel(
+            consumer_country=list(self.countries)
+        )
         activity_mix, mapping_gaps = map_consumption_mix_to_ecoinvent_activities(
-            results["consumption_mix"],
+            selected_consumption_mix,
             activity_mapping,
             check=self.check,
             return_mapping_gaps=True,
@@ -489,6 +492,13 @@ class NewDatabase:
             download=self.download,
             engine=self.engine,
             verbose=self.verbose,
+        )
+        _validate_tyndp_country_coverage(
+            Z_gross,
+            countries=self.countries,
+            scenario=self.scenario,
+            year=year,
+            climate_year=self.climate_year,
         )
         Z_gross = _select_dataframe_times(
             Z_gross,
@@ -700,3 +710,37 @@ def _select_dataframe_times(dataframe, *, time_range, times):
     if selected.empty:
         raise ValueError("The requested time selection contains no source data")
     return selected
+
+
+def _validate_tyndp_country_coverage(
+    Z_gross,
+    *,
+    countries,
+    scenario,
+    year,
+    climate_year,
+):
+    """Raise before solving when a TYNDP scenario omits requested countries."""
+    if not isinstance(Z_gross.columns, pd.MultiIndex):
+        return
+    country_levels = {"country from", "country to"}
+    if not country_levels.issubset(Z_gross.columns.names):
+        return
+
+    available = set()
+    for level in country_levels:
+        available.update(
+            str(country)
+            for country in Z_gross.columns.get_level_values(level)
+            if pd.notna(country)
+        )
+    missing = sorted(set(countries).difference(available))
+    if not missing:
+        return
+
+    raise ValueError(
+        f"TYNDP scenario {scenario!r} for {year} with climate year "
+        f"{climate_year} does not contain requested countries: "
+        + ", ".join(missing)
+        + ". Remove them from countries or use a scenario that models them."
+    )

@@ -134,3 +134,87 @@ def test_explicit_fallback_geography_remains_supported():
 
     assert activity_mix["geography"].isel(activity=-1).item() == "RER"
     np.testing.assert_allclose(activity_mix.isel(activity=-1), [[0.4], [0.8]])
+
+
+def test_sparse_activity_mapping_matches_dense_multi_country_reference():
+    rng = np.random.default_rng(42)
+    consumption_mix = xr.DataArray(
+        rng.random((3, 2, 3, 3)),
+        dims=("time", "consumer_country", "source_country", "technology"),
+        coords={
+            "time": pd.date_range("2025-01-01", periods=3, freq="h"),
+            "consumer_country": ["FR", "IT"],
+            "source_country": ["DE", "UK", "ZZ"],
+            "technology": ["Solar", "Wind", "Unknown"],
+        },
+        name="consumption_mix",
+    )
+    consumption_mix /= consumption_mix.sum(["source_country", "technology"])
+
+    activity_index = pd.MultiIndex.from_tuples(
+        [
+            ("DE", "solar A", "electricity", "kWh"),
+            ("DE", "solar B", "electricity", "kWh"),
+            ("RER", "wind", "electricity", "kWh"),
+        ],
+        names=["geography_source", "activityName", "product", "unitName"],
+    )
+    mapping_columns = pd.MultiIndex.from_tuples(
+        [
+            ("DE", "Solar"),
+            ("DE", "Wind"),
+            ("GB", "Solar"),
+            ("GB", "Wind"),
+        ],
+        names=["country", "technology"],
+    )
+    activity_mapping = pd.DataFrame(
+        [
+            [0.7, 0.0, 1.0, 0.0],
+            [0.3, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 1.0],
+        ],
+        index=activity_index,
+        columns=mapping_columns,
+    )
+
+    actual, actual_gaps = map_consumption_mix_to_ecoinvent_activities(
+        consumption_mix,
+        activity_mapping,
+        return_mapping_gaps=True,
+        time_chunk_size=1,
+    )
+
+    source_countries = consumption_mix["source_country"].to_index()
+    technologies = consumption_mix["technology"].to_index()
+    dense_weights = np.zeros((3, 3, 3), dtype=float)
+    for country_idx, source_country in enumerate(source_countries):
+        mapping_country = {"UK": "GB"}.get(source_country, source_country)
+        if mapping_country not in mapping_columns.get_level_values("country"):
+            continue
+        dense_weights[country_idx] = (
+            activity_mapping.xs(mapping_country, axis=1, level="country")
+            .reindex(columns=technologies, fill_value=0)
+            .to_numpy(dtype=float)
+            .T
+        )
+
+    direct = np.einsum(
+        "tcsk,ska->tca",
+        consumption_mix.to_numpy(),
+        dense_weights,
+    )
+    coverage = dense_weights.sum(axis=2)
+    expected_gaps = consumption_mix.to_numpy() * np.clip(
+        1 - coverage,
+        a_min=0,
+        a_max=None,
+    )
+    fallback = expected_gaps.sum(axis=3)
+    expected = np.concatenate([direct, fallback], axis=2)
+
+    np.testing.assert_allclose(actual.to_numpy(), expected)
+    np.testing.assert_allclose(actual_gaps.to_numpy(), expected_gaps)
+    assert actual.dims == ("time", "consumer_country", "activity")
+    assert actual["geography"].to_numpy().tolist()[-3:] == ["DE", "GB", "ZZ"]
+    np.testing.assert_allclose(actual.sum("activity"), 1)

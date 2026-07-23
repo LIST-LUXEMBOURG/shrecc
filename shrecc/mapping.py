@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
+from scipy.sparse import csr_matrix, hstack
 
 DEFAULT_COUNTRY_ALIASES = {"NIE": "GB", "UK": "GB"}
 DEFAULT_FALLBACK_ACTIVITY = (
@@ -13,6 +14,137 @@ DEFAULT_FALLBACK_ACTIVITY = (
     "electricity, high voltage",
     "kWh",
 )
+DEFAULT_MAPPING_TIME_CHUNK_SIZE = 168
+
+
+def _build_ecoinvent_mapping_operator(
+    activity_mapping,
+    source_countries,
+    technologies,
+    aliases,
+    fallback_geography,
+):
+    """Build the sparse source-technology to activity allocation operator."""
+    source_countries = pd.Index(source_countries)
+    technologies = pd.Index(technologies)
+    mapping_countries = activity_mapping.columns.get_level_values(0)
+    source_count = len(source_countries)
+    technology_count = len(technologies)
+    activity_count = len(activity_mapping)
+
+    row_indices = []
+    column_indices = []
+    allocation_values = []
+
+    for country_idx, source_country in enumerate(source_countries):
+        mapping_country = aliases.get(source_country, source_country)
+        if mapping_country not in mapping_countries:
+            continue
+
+        country_mapping = (
+            activity_mapping.xs(mapping_country, axis=1, level=0)
+            .reindex(columns=technologies, fill_value=0)
+            .fillna(0)
+            .to_numpy(dtype=float)
+        )
+        activity_indices, technology_indices = np.nonzero(country_mapping)
+        row_indices.extend(
+            country_idx * technology_count + technology_indices
+        )
+        column_indices.extend(activity_indices)
+        allocation_values.extend(
+            country_mapping[activity_indices, technology_indices]
+        )
+
+    feature_count = source_count * technology_count
+    direct_mapping = csr_matrix(
+        (allocation_values, (row_indices, column_indices)),
+        shape=(feature_count, activity_count),
+        dtype=float,
+    )
+    mapping_coverage = np.asarray(direct_mapping.sum(axis=1)).ravel()
+    fallback_weights = np.clip(1 - mapping_coverage, a_min=0, a_max=None)
+
+    if fallback_geography is None:
+        fallback_columns = np.repeat(
+            np.arange(source_count),
+            technology_count,
+        )
+        fallback_count = source_count
+    else:
+        fallback_columns = np.zeros(feature_count, dtype=int)
+        fallback_count = 1
+
+    fallback_rows = np.flatnonzero(fallback_weights)
+    fallback_mapping = csr_matrix(
+        (
+            fallback_weights[fallback_rows],
+            (fallback_rows, fallback_columns[fallback_rows]),
+        ),
+        shape=(feature_count, fallback_count),
+        dtype=float,
+    )
+    return (
+        hstack([direct_mapping, fallback_mapping], format="csr"),
+        mapping_coverage.reshape(source_count, technology_count),
+        activity_count,
+    )
+
+
+def _apply_sparse_mapping_operator(
+    consumption_mix,
+    mapping_operator,
+    *,
+    time_chunk_size,
+):
+    """Apply a sparse mapping operator without copying the full input array."""
+    mapping_dims = {"source_country", "technology"}
+    outer_dims = [dim for dim in consumption_mix.dims if dim not in mapping_dims]
+    transposed = consumption_mix.transpose(
+        *outer_dims,
+        "source_country",
+        "technology",
+    )
+    outer_shape = tuple(transposed.sizes[dim] for dim in outer_dims)
+    feature_count = (
+        transposed.sizes["source_country"] * transposed.sizes["technology"]
+    )
+    output = np.empty(
+        outer_shape + (mapping_operator.shape[1],),
+        dtype=float,
+    )
+
+    if not outer_dims:
+        input_values = np.asarray(transposed.data, dtype=float).reshape(
+            1,
+            feature_count,
+        )
+        output[...] = mapping_operator.T.dot(input_values.T).T.reshape(
+            mapping_operator.shape[1]
+        )
+        return output, outer_dims
+
+    chunk_dim = outer_dims[0]
+    chunk_length = transposed.sizes[chunk_dim]
+    if time_chunk_size is None:
+        time_chunk_size = chunk_length
+    if not isinstance(time_chunk_size, (int, np.integer)) or time_chunk_size <= 0:
+        raise ValueError("time_chunk_size must be a positive integer or None")
+
+    for start in range(0, chunk_length, time_chunk_size):
+        stop = min(start + time_chunk_size, chunk_length)
+        chunk = transposed.isel({chunk_dim: slice(start, stop)})
+        input_values = np.asarray(chunk.data, dtype=float).reshape(
+            -1,
+            feature_count,
+        )
+        mapped_values = mapping_operator.T.dot(input_values.T).T
+        output[start:stop] = mapped_values.reshape(
+            (stop - start,)
+            + outer_shape[1:]
+            + (mapping_operator.shape[1],)
+        )
+    return output, outer_dims
 
 
 def load_ecoinvent_mapping(mapping_location):
@@ -55,6 +187,7 @@ def map_consumption_mix_to_ecoinvent_activities(
     fallback_activity=DEFAULT_FALLBACK_ACTIVITY,
     check=True,
     return_mapping_gaps=False,
+    time_chunk_size=DEFAULT_MAPPING_TIME_CHUNK_SIZE,
 ):
     """Map source-country technologies to ecoinvent activities.
 
@@ -79,6 +212,10 @@ def map_consumption_mix_to_ecoinvent_activities(
             assignment conserves the complete input mix.
         return_mapping_gaps: Also return detailed shares that had no direct
             source-country and technology mapping.
+        time_chunk_size: Number of positions along the first non-mapping
+            dimension to process per sparse multiplication. The default maps
+            one week at a time for canonical hourly results. Set to ``None``
+            to process the complete array at once.
 
     Returns:
         Mapped activity-mix DataArray. If ``return_mapping_gaps`` is true,
@@ -114,80 +251,74 @@ def map_consumption_mix_to_ecoinvent_activities(
 
     source_countries = consumption_mix["source_country"].to_index()
     technologies = consumption_mix["technology"].to_index()
-    weights = np.zeros(
-        (len(source_countries), len(technologies), len(activity_mapping)),
-        dtype=float,
-    )
-    mapping_countries = activity_mapping.columns.get_level_values(0)
-
-    for country_idx, source_country in enumerate(source_countries):
-        mapping_country = aliases.get(source_country, source_country)
-        if mapping_country not in mapping_countries:
-            continue
-        country_mapping = activity_mapping.xs(
-            mapping_country,
-            axis=1,
-            level=0,
-        ).reindex(columns=technologies, fill_value=0).fillna(0)
-        weights[country_idx] = country_mapping.to_numpy(dtype=float).T
-
-    weights_xr = xr.DataArray(
-        weights,
-        dims=("source_country", "technology", "activity"),
-        coords={
-            "source_country": source_countries,
-            "technology": technologies,
-            "activity": np.arange(len(activity_mapping)),
-        },
-    )
-    activity_mix = xr.dot(
-        consumption_mix,
-        weights_xr,
-        dim=["source_country", "technology"],
-    )
-    mapped_total = activity_mix.sum("activity")
-    input_total = consumption_mix.sum(["source_country", "technology"])
-    mapping_coverage = weights_xr.sum("activity")
-    mapping_gaps = (
-        consumption_mix * (1 - mapping_coverage).clip(min=0)
-    ).rename("mapping_gap")
-    mapping_gaps.attrs["unit"] = "dimensionless"
-
     fallback_geography, fallback_name, fallback_product, fallback_unit = (
         fallback_activity
     )
+    mapping_operator, mapping_coverage, direct_activity_count = (
+        _build_ecoinvent_mapping_operator(
+            activity_mapping,
+            source_countries,
+            technologies,
+            aliases,
+            fallback_geography,
+        )
+    )
+    mapped_values, outer_dims = _apply_sparse_mapping_operator(
+        consumption_mix,
+        mapping_operator,
+        time_chunk_size=time_chunk_size,
+    )
+
+    fallback_countries = [
+        aliases.get(country, country) for country in source_countries
+    ]
     if fallback_geography is None:
-        fallback = mapping_gaps.sum("technology").rename(
-            source_country="activity"
-        )
-        fallback_countries = [
-            aliases.get(country, country) for country in source_countries
-        ]
-        fallback = fallback.assign_coords(
-            activity=np.arange(
-                len(activity_mapping),
-                len(activity_mapping) + len(fallback_countries),
-            )
-        )
         fallback_index = [
             (country, fallback_name, fallback_product, fallback_unit)
             for country in fallback_countries
         ]
     else:
-        fallback = mapping_gaps.sum(
-            ["source_country", "technology"]
-        ).expand_dims(activity=[len(activity_mapping)])
         fallback_index = [tuple(fallback_activity)]
 
-    activity_mix = xr.concat([activity_mix, fallback], dim="activity")
     activity_index = list(activity_mapping.index) + fallback_index
+    preserved_coords = {
+        name: coord
+        for name, coord in consumption_mix.coords.items()
+        if set(coord.dims).issubset(outer_dims)
+    }
+    preserved_coords["activity"] = np.arange(len(activity_index))
+    activity_mix = xr.DataArray(
+        mapped_values,
+        dims=outer_dims + ["activity"],
+        coords=preserved_coords,
+        name="activity_mix",
+    )
     activity_mix = activity_mix.assign_coords(
         geography=("activity", [item[0] for item in activity_index]),
         activity_name=("activity", [item[1] for item in activity_index]),
         product=("activity", [item[2] for item in activity_index]),
         unit=("activity", [item[3] for item in activity_index]),
-    ).rename("activity_mix")
+    )
     activity_mix.attrs["unit"] = "dimensionless"
+
+    mapped_total = activity_mix.isel(
+        activity=slice(0, direct_activity_count)
+    ).sum("activity")
+    input_total = consumption_mix.sum(["source_country", "technology"])
+    mapping_gaps = None
+    if return_mapping_gaps:
+        mapping_coverage_xr = xr.DataArray(
+            mapping_coverage,
+            dims=("source_country", "technology"),
+            coords={
+                "source_country": source_countries,
+                "technology": technologies,
+            },
+        )
+        mapping_gaps = (
+            consumption_mix * (1 - mapping_coverage_xr).clip(min=0)
+        ).rename("mapping_gap")
+        mapping_gaps.attrs["unit"] = "dimensionless"
 
     if check:
         if (mapped_total > input_total + 1e-8).any():
