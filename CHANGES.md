@@ -27,6 +27,8 @@ mapping behavior.
   inspected before Brightway is modified.
 - Add a minimal getting-started notebook and an expanded historical and
   prospective analysis notebook.
+- Add an annual European validation notebook comparing SHRECC technology mixes
+  and climate-change results with ecoinvent and premise backgrounds.
 - Record the model year in written foreground activity names and Brightway
   activity metadata.
 
@@ -53,6 +55,8 @@ mapping behavior.
   dependency.
 - Move downloaded and generated data to local user-data caches and keep only
   required mapping resources inside the installed package.
+- Map historical country-technology allocations with a chunked sparse operator
+  and restrict activity mapping to the requested consumer countries.
 
 ### Fixed
 
