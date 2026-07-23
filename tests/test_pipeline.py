@@ -131,9 +131,9 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
         years=2025,
         countries=["FR"],
         project_name="project",
-        premise_db="ecoinvent-3.11-cutoff",
+        bg_db_name="ecoinvent-3.11-cutoff",
         my_db_name="shrecc_FR_2025",
-        general_range=["2025-06-01 10:00", "2025-06-01 11:00"],
+        time_range=["2025-06-01 10:00", "2025-06-01 11:00"],
         cutoff=0,
         include_cutoff=False,
         data_dir="data",
@@ -162,7 +162,7 @@ def test_historical_create_runs_real_canonical_pipeline(monkeypatch, tmp_path):
         years=2025,
         countries=["A", "B"],
         project_name="project",
-        premise_db="ecoinvent",
+        bg_db_name="ecoinvent",
         my_db_name="shrecc_AB_2025",
         times=["2025-06-01 10:00"],
         cutoff=0,
@@ -221,7 +221,7 @@ def test_historical_create_repairs_cache_missing_required_country(
         years=2025,
         countries=["NL"],
         project_name="project",
-        premise_db="ecoinvent",
+        bg_db_name="ecoinvent",
         my_db_name="shrecc_NL_2025",
         times=["2025-06-01 10:00"],
         data_dir=tmp_path,
@@ -274,10 +274,10 @@ def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch)
         scenario="DE",
         years=[year],
         climate_year=2009,
-        premise_db="premise-remind-eu-2040",
+        bg_db_name="premise-remind-eu-2040",
         my_db_name="shrecc_DE_2040",
         countries=["FR"],
-        general_range=["2040-06-01 10:00", "2040-06-01 11:00"],
+        time_range=["2040-06-01 10:00", "2040-06-01 11:00"],
         project_name="project",
         cutoff=0,
         include_cutoff=False,
@@ -304,10 +304,10 @@ def test_multi_year_names_and_time_ranges_are_expanded():
         scenario="DE",
         years=[2035, 2040],
         climate_year=2009,
-        premise_db="premise-remind-eu-{year}",
+        bg_db_name="premise-remind-eu-{year}",
         my_db_name="shrecc_DE",
         countries=["FR"],
-        general_range=["2040-06-01 10:00", "2040-06-30 14:00"],
+        time_range=["2040-06-01 10:00", "2040-06-30 14:00"],
         project_name="project",
     )
 
@@ -322,16 +322,44 @@ def test_multi_year_names_and_time_ranges_are_expanded():
     assert database._selection_for_year(2035)[0][0].year == 2035
 
 
+def test_hour_range_is_inclusive_and_hourly_by_definition():
+    database = NewDatabase(
+        years=2025,
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc_FR_2025",
+        countries=["FR"],
+        time_range=["2025-06-01", "2025-06-30 23:00"],
+        hour_range=[10, 14],
+        project_name="project",
+    )
+
+    assert database.hour_range == [10, 14]
+
+
+@pytest.mark.parametrize("hour_range", ([10], [-1, 10], [14, 10], [10, 24]))
+def test_hour_range_rejects_invalid_bounds(hour_range):
+    with pytest.raises(ValueError, match="hour_range"):
+        NewDatabase(
+            years=2025,
+            bg_db_name="ecoinvent",
+            my_db_name="shrecc_FR_2025",
+            countries=["FR"],
+            time_range=["2025-06-01", "2025-06-30 23:00"],
+            hour_range=hour_range,
+            project_name="project",
+        )
+
+
 def test_multiple_years_require_explicit_background_database_names():
-    with pytest.raises(ValueError, match="premise_db must be a year mapping"):
+    with pytest.raises(ValueError, match="bg_db_name must be a year mapping"):
         NewDatabase(
             scenario="DE",
             years=[2035, 2040],
             climate_year=2009,
-            premise_db="one-background-database",
+            bg_db_name="one-background-database",
             my_db_name="shrecc_DE",
             countries=["FR"],
-            general_range=["2040-06-01", "2040-06-30"],
+            time_range=["2040-06-01", "2040-06-30"],
             project_name="project",
         )
 
@@ -342,9 +370,9 @@ def test_tyndp_scenario_year_is_validated_during_initialization():
             scenario="NT",
             years=2035,
             climate_year=2009,
-            premise_db="premise-remind-eu-2035",
+            bg_db_name="premise-remind-eu-2035",
             my_db_name="shrecc_NT_2035",
             countries=["FR"],
-            general_range=["2035-06-01", "2035-06-30"],
+            time_range=["2035-06-01", "2035-06-30"],
             project_name="project",
         )

@@ -51,9 +51,12 @@ To install shrecc from source, clone the code and then install the package and i
 
 ## Usage
 
-You can find a usage example in the repository's
-[unified usage notebook](https://git.list.lu/shrecc_project/SHRECC/-/blob/main/notebooks/shrecc_usage.ipynb)
-_and_ in the documentation at [read the docs](https://shrecc.readthedocs.io/en/latest/content/notebooks/).
+The repository contains a minimal
+[getting-started notebook](https://git.list.lu/shrecc_project/SHRECC/-/blob/main/notebooks/1_shrecc_get_started.ipynb)
+and a more detailed
+[analysis notebook](https://git.list.lu/shrecc_project/SHRECC/-/blob/main/notebooks/2_shrecc_analysis.ipynb).
+Both are also available in the documentation at
+[read the docs](https://shrecc.readthedocs.io/en/latest/content/notebooks/).
 
 The harmonized historical/prospective workflow is available through
 `NewDatabase`:
@@ -65,16 +68,15 @@ electricity = NewDatabase(
     scenario="DE",
     years=[2035, 2040, 2050],
     climate_year=2009,
-    premise_db={
+    bg_db_name={
         2035: "premise-remind-eu-2035",
         2040: "premise-remind-eu-2040",
         2050: "premise-remind-eu-2050",
     },
     my_db_name="shrecc_tyndp_DE_june_noon",
     countries=["ES", "FR", "DE", "IT", "PT", "BE", "NL", "LU", "AT", "CH"],
-    general_range=["2040-06-01 00:00:00", "2040-06-30 23:00:00"],
-    refined_range=[10, 14],
-    freq="h",
+    time_range=["2040-06-01 00:00:00", "2040-06-30 23:00:00"],
+    hour_range=[10, 14],
     project_name="SHRECCei311",
     source="auto",
 )

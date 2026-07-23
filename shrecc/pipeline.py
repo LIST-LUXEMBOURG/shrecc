@@ -67,9 +67,8 @@ class NewDatabase:
             for example ``["DE", "FR", "NL"]``.
         project_name: Brightway project that receives the database when
             :meth:`write` is called.
-        premise_db: Existing background database name. Despite the historical
-            parameter name, this can also be a regular ecoinvent database for
-            Energy Charts years. For several years, provide a ``{year: name}``
+        bg_db_name: Existing ecoinvent or premise-modified ecoinvent background
+            database name. For several years, provide a ``{year: name}``
             mapping or a string containing ``"{year}"``.
         my_db_name: Name of the database to create. A year suffix is added
             automatically for multi-year runs unless names are supplied as a
@@ -79,12 +78,12 @@ class NewDatabase:
         climate_year: Weather year used by TYNDP. Required for TYNDP years.
         iam: IAM geography model used by premise, currently typically
             ``"remind-eu"``.
-        general_range: Two timestamps defining an inclusive period. For a
+        time_range: Two timestamps defining an inclusive period. For a
             multi-year run, their month, day, and time are reused in each year.
-        refined_range: Optional inclusive hour range within
-            ``general_range``, for example ``[10, 14]``.
-        freq: Pandas frequency used with ``refined_range``, usually ``"h"``.
-        times: Exact timestamps to select instead of ``general_range``.
+        hour_range: Optional inclusive daily hour range within ``time_range``,
+            for example ``[10, 14]``.
+        times: Exact, potentially disconnected timestamps to select instead of
+            ``time_range``.
         source: ``"auto"``, ``"energy_charts"``, or ``"tyndp"``.
         cutoff: Minimum activity share retained as an individual row.
         include_cutoff: If true, combine shares below ``cutoff`` into a
@@ -121,9 +120,9 @@ class NewDatabase:
         ...     years=2025,
         ...     countries=["DE", "FR"],
         ...     project_name="my-project",
-        ...     premise_db="ecoinvent-3.11-cutoff",
+        ...     bg_db_name="ecoinvent-3.11-cutoff",
         ...     my_db_name="shrecc_2025",
-        ...     general_range=[
+        ...     time_range=[
         ...         "2025-06-01 00:00:00",
         ...         "2025-06-30 23:00:00",
         ...     ],
@@ -140,14 +139,13 @@ class NewDatabase:
         years,
         countries,
         project_name,
-        premise_db,
+        bg_db_name,
         my_db_name,
         scenario=None,
         climate_year=None,
         iam="remind-eu",
-        general_range=None,
-        refined_range=None,
-        freq=None,
+        time_range=None,
+        hour_range=None,
         times=None,
         source="auto",
         cutoff=1e-3,
@@ -178,11 +176,10 @@ class NewDatabase:
                 "source must be one of: " + ", ".join(sorted(VALID_SOURCES))
             )
 
-        self.general_range = general_range
-        self.refined_range = refined_range
-        self.freq = freq
+        self.time_range = time_range
+        self.hour_range = hour_range
         self.times = times
-        _validate_time_selection(general_range, refined_range, freq, times)
+        _validate_time_selection(time_range, hour_range, times)
 
         self.cutoff = float(cutoff)
         if self.cutoff < 0:
@@ -233,9 +230,9 @@ class NewDatabase:
                     )
 
         self.background_databases = _resolve_year_values(
-            premise_db,
+            bg_db_name,
             self.years,
-            "premise_db",
+            "bg_db_name",
             allow_automatic_suffix=False,
         )
         self.database_names = _resolve_year_values(
@@ -393,10 +390,10 @@ class NewDatabase:
                 path_to_data=data_root,
                 include_consumption_mix_volume=False,
             )
-        general_range, times = self._selection_for_year(year)
+        time_range, times = self._selection_for_year(year)
         results = load_consumption_result_cache(
             cache_dir,
-            general_range=general_range,
+            general_range=time_range,
             times=times,
         )
         missing_result_countries = set(self.countries).difference(
@@ -429,7 +426,7 @@ class NewDatabase:
             )
             results = load_consumption_result_cache(
                 cache_dir,
-                general_range=general_range,
+                general_range=time_range,
                 times=times,
             )
             remaining_missing = set(self.countries).difference(
@@ -458,9 +455,9 @@ class NewDatabase:
         mapping_report = mapping_gap_to_report(
             mapping_gaps,
             countries=self.countries,
-            general_range=general_range,
-            refined_range=self.refined_range,
-            freq=self.freq,
+            general_range=time_range,
+            refined_range=self.hour_range,
+            freq="h",
             times=times,
         )
         self.mapping_gaps[year] = mapping_gaps
@@ -469,15 +466,15 @@ class NewDatabase:
         table = activity_mix_to_database_table(
             activity_mix,
             countries=self.countries,
-            general_range=general_range,
-            refined_range=self.refined_range,
-            freq=self.freq,
+            general_range=time_range,
+            refined_range=self.hour_range,
+            freq="h",
             times=times,
         )
         self._store_year(year, results, activity_mix, table)
 
     def _create_tyndp_year(self, year):
-        general_range, times = self._selection_for_year(year)
+        time_range, times = self._selection_for_year(year)
         Z_gross = build_z_gross_from_tyndp_scenario(
             scenario=self.scenario,
             year=year,
@@ -491,7 +488,7 @@ class NewDatabase:
         )
         Z_gross = _select_dataframe_times(
             Z_gross,
-            general_range=general_range,
+            time_range=time_range,
             times=times,
         )
         results = consumption_results_from_z_gross(
@@ -518,9 +515,9 @@ class NewDatabase:
             activity_mix,
             exchange_geography_map,
             countries=self.countries,
-            general_range=general_range,
-            refined_range=self.refined_range,
-            freq=self.freq,
+            general_range=time_range,
+            refined_range=self.hour_range,
+            freq="h",
             times=times,
         )
         self.exchange_geography_maps[year] = exchange_geography_map
@@ -578,12 +575,12 @@ class NewDatabase:
         return self._data_root() / "tyndp" / "cache"
 
     def _selection_for_year(self, year):
-        if self.general_range is not None:
-            timestamps = pd.to_datetime(self.general_range)
+        if self.time_range is not None:
+            timestamps = pd.to_datetime(self.time_range)
             if len(self.years) == 1:
                 if any(timestamp.year != year for timestamp in timestamps):
                     raise ValueError(
-                        f"general_range timestamps must belong to year {year}"
+                        f"time_range timestamps must belong to year {year}"
                     )
             else:
                 timestamps = pd.DatetimeIndex(
@@ -670,24 +667,30 @@ def _resolve_year_values(value, years, name, allow_automatic_suffix):
     )
 
 
-def _validate_time_selection(general_range, refined_range, freq, times):
-    if general_range is None and times is None:
-        raise ValueError("Either general_range or times must be provided")
-    if general_range is not None and times is not None:
-        raise ValueError("Use either general_range or times, not both")
-    if general_range is not None and len(general_range) != 2:
-        raise ValueError("general_range must contain a start and end timestamp")
+def _validate_time_selection(time_range, hour_range, times):
+    if time_range is None and times is None:
+        raise ValueError("Either time_range or times must be provided")
+    if time_range is not None and times is not None:
+        raise ValueError("Use either time_range or times, not both")
+    if time_range is not None and len(time_range) != 2:
+        raise ValueError("time_range must contain a start and end timestamp")
     if times is not None and not len(times):
         raise ValueError("times must contain at least one timestamp")
-    if refined_range and general_range is None:
-        raise ValueError("general_range is required when refined_range is supplied")
-    if refined_range and freq is None:
-        raise ValueError("freq is required when refined_range is supplied")
+    if hour_range is not None and time_range is None:
+        raise ValueError("time_range is required when hour_range is supplied")
+    if hour_range is not None:
+        if len(hour_range) != 2:
+            raise ValueError("hour_range must contain a start and end hour")
+        start_hour, end_hour = hour_range
+        if not 0 <= start_hour <= end_hour <= 23:
+            raise ValueError(
+                "hour_range must contain inclusive hours between 0 and 23"
+            )
 
 
-def _select_dataframe_times(dataframe, *, general_range, times):
-    if general_range is not None:
-        selected = dataframe.loc[general_range[0] : general_range[1]]
+def _select_dataframe_times(dataframe, *, time_range, times):
+    if time_range is not None:
+        selected = dataframe.loc[time_range[0] : time_range[1]]
     else:
         selected = dataframe.loc[dataframe.index.isin(times)]
     if selected.empty:

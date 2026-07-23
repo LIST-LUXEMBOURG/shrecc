@@ -69,7 +69,8 @@ Energy Charts and prospective TYNDP paths were brought onto one pipeline.
   `_legacy_database.py`, and `_legacy_tyndp.py`; the canonical pipeline does not
   depend on them.
 - Archived the former source-specific example notebooks and replaced them with
-  `notebooks/shrecc_usage.ipynb`.
+  a minimal `notebooks/1_shrecc_get_started.ipynb` workflow and the expanded
+  `notebooks/2_shrecc_analysis.ipynb` walkthrough.
 - Removed obsolete spreadsheet mappings and generated report artifacts from the
   tracked/package-data surface.
 - Retained the NED.nl-enhanced ecoinvent concordance as packaged mapping data for

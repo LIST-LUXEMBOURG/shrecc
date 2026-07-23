@@ -25,7 +25,8 @@ mapping behavior.
   premise/REMIND-EU activity mapping.
 - Add `results(year)` and `table(year)` accessors so intermediate results can be
   inspected before Brightway is modified.
-- Add one unified usage notebook for historical and prospective examples.
+- Add a minimal getting-started notebook and an expanded historical and
+  prospective analysis notebook.
 
 ### Changed
 
@@ -35,6 +36,8 @@ mapping behavior.
   Brightway writing into focused modules.
 - Make `create()` prepare and validate database tables without modifying
   Brightway; database changes occur only through `write()`.
+- Rename the high-level background database argument to `bg_db_name` and
+  simplify temporal selection to `times`, `time_range`, and `hour_range`.
 - Reuse country-specific ecoinvent shares for established one-to-many TYNDP
   technologies and map unique prospective activities directly.
 - Prefer source-country activity geography when available, then fall back to the
