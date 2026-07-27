@@ -54,10 +54,10 @@ To install shrecc from source, clone the code and then install the package and i
 ## Usage
 
 The repository contains a minimal
-[getting-started notebook](https://git.list.lu/shrecc_project/SHRECC/-/blob/main/notebooks/1_shrecc_get_started.ipynb)
+[getting-started notebook](https://git.list.lu/shrecc_project/shrecc/-/blob/develop/notebooks/1_shrecc_get_started.ipynb)
 and a more detailed
-[analysis notebook](https://git.list.lu/shrecc_project/SHRECC/-/blob/main/notebooks/2_shrecc_analysis.ipynb).
-Both are also available in the documentation at
+[analysis notebook](https://git.list.lu/shrecc_project/SHRECC/-/blob/develop/notebooks/2_shrecc_analysis.ipynb).
+Both are also available in the documentation (only for main releases) at
 [read the docs](https://shrecc.readthedocs.io/en/latest/content/notebooks/).
 
 The harmonized historical/prospective workflow is available through
