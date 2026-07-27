@@ -56,6 +56,7 @@ def test_load_mapping_data_basic(tmp_path):
     df_string = load_mapping_data(str(csv_file))
     # Check if both methods return the same DataFrame
     assert df.equals(df_string)
+    assert df.equals(load_mapping_data(str(tmp_path)))
 
 
 def test_load_mapping_data_file_not_found(tmp_path):
@@ -118,7 +119,9 @@ def test_load_time_series_data_basic(monkeypatch, tmp_path):
         else:
             raise ValueError("Unexpected file: " + str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", mock_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", mock_load_from_pickle
+    )
 
     df = load_time_series_data(tmp_path, year)
     # Check DataFrame shape and content
@@ -155,7 +158,9 @@ def test_load_time_series_data_file_not_found(monkeypatch, tmp_path):
     def fake_load_from_pickle(path):
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
     with pytest.raises(FileNotFoundError):
         load_time_series_data(tmp_path, 2023)
 
@@ -585,12 +590,15 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
     Z_cons = MagicMock(name="Z_cons")
     Z_cons_to_multiply = MagicMock(name="Z_cons_to_multiply")
     # Patch load_mapping_data, load_time_series_data, prepare_consumption_data
-    monkeypatch.setattr("shrecc.database.load_mapping_data", lambda _: el_map_all_norm)
     monkeypatch.setattr(
-        "shrecc.database.load_time_series_data", lambda path, year: Z_cons
+        "shrecc._legacy_database.load_mapping_data", lambda _: el_map_all_norm
     )
     monkeypatch.setattr(
-        "shrecc.database.prepare_consumption_data", lambda _: Z_cons_to_multiply
+        "shrecc._legacy_database.load_time_series_data", lambda path, year: Z_cons
+    )
+    monkeypatch.setattr(
+        "shrecc._legacy_database.prepare_consumption_data",
+        lambda _: Z_cons_to_multiply,
     )
     # if the file exists, we should remove it to ensure we test the saving functionality
     scaled_path = data_dir / "LCI_cons_scaled_2023.pkl"
@@ -615,7 +623,7 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
     lci_cons_data = [[1.0, 2.0], [3.0, 4.0]]
     LCI_cons = pd.DataFrame(lci_cons_data, index=index, columns=columns)
     # Patch apply_mapping to return LCI_cons
-    monkeypatch.setattr("shrecc.database.apply_mapping", lambda z, m: LCI_cons)
+    monkeypatch.setattr("shrecc._legacy_database.apply_mapping", lambda z, m: LCI_cons)
     # Patch load_from_pickle for Z_load_2023.pkl
     load = pd.DataFrame(
         [[10.0, 20.0], [30.0, 40.0]],
@@ -628,7 +636,9 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
             return load
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
     # Patch save_to_pickle to record call
     saved = {}
 
@@ -636,9 +646,9 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
         saved["obj"] = obj
         saved["path"] = path
 
-    monkeypatch.setattr("shrecc.database.save_to_pickle", fake_save_to_pickle)
+    monkeypatch.setattr("shrecc._legacy_database.save_to_pickle", fake_save_to_pickle)
     # Patch files to avoid importlib.resources.files
-    monkeypatch.setattr("shrecc.database.files", lambda pkg: tmp_path)
+    monkeypatch.setattr("shrecc._legacy_database.files", lambda pkg: tmp_path)
     # Call tech_mapping
     result = tech_mapping(year, tmp_path)
     # Should return a DataFrame
@@ -661,11 +671,11 @@ def test_tech_mapping_computes_and_saves(monkeypatch, tmp_path):
     assert result.loc[load_difference_row].sum() == approx(1.3)
 
 
-@patch("shrecc.database.save_to_pickle")
-@patch("shrecc.database.load_mapping_data")
-@patch("shrecc.database.load_time_series_data")
-@patch("shrecc.database.prepare_consumption_data")
-@patch("shrecc.database.apply_mapping")
+@patch("shrecc._legacy_database.save_to_pickle")
+@patch("shrecc._legacy_database.load_mapping_data")
+@patch("shrecc._legacy_database.load_time_series_data")
+@patch("shrecc._legacy_database.prepare_consumption_data")
+@patch("shrecc._legacy_database.apply_mapping")
 def test_tech_mapping_if_file_exists(
     mock_apply_mapping,
     mock_consumption_data,
@@ -694,9 +704,11 @@ def test_tech_mapping_if_file_exists(
             return dummy_df
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
     # Patch files to avoid importlib.resources.files
-    monkeypatch.setattr("shrecc.database.files", lambda pkg: tmp_path)
+    monkeypatch.setattr("shrecc._legacy_database.files", lambda pkg: tmp_path)
     # Call tech_mapping
     result = tech_mapping(year, tmp_path)
     # Should return the dummy DataFrame and correctly called the functions
@@ -723,12 +735,16 @@ def test_tech_mapping_handles_empty_difference(monkeypatch, tmp_path):
         names=["source", "exch_name", "prod", "unit"],
     )
     LCI_cons = pd.DataFrame([[5.0]], index=index, columns=columns)
-    monkeypatch.setattr("shrecc.database.apply_mapping", lambda z, m: LCI_cons)
-    monkeypatch.setattr("shrecc.database.load_mapping_data", lambda path: None)
+    monkeypatch.setattr("shrecc._legacy_database.apply_mapping", lambda z, m: LCI_cons)
     monkeypatch.setattr(
-        "shrecc.database.load_time_series_data", lambda path, year: None
+        "shrecc._legacy_database.load_mapping_data", lambda path: None
     )
-    monkeypatch.setattr("shrecc.database.prepare_consumption_data", lambda z: None)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_time_series_data", lambda path, year: None
+    )
+    monkeypatch.setattr(
+        "shrecc._legacy_database.prepare_consumption_data", lambda z: None
+    )
     # load DataFrame with same value as LCI_cons.sum()
     load = pd.DataFrame([[5.0]], index=["FR"], columns=["2023-01-01 00:00:00"])
 
@@ -737,9 +753,13 @@ def test_tech_mapping_handles_empty_difference(monkeypatch, tmp_path):
             return load
         raise FileNotFoundError(str(path))
 
-    monkeypatch.setattr("shrecc.database.load_from_pickle", fake_load_from_pickle)
-    monkeypatch.setattr("shrecc.database.save_to_pickle", lambda obj, path: None)
-    monkeypatch.setattr("shrecc.database.files", lambda pkg: tmp_path)
+    monkeypatch.setattr(
+        "shrecc._legacy_database.load_from_pickle", fake_load_from_pickle
+    )
+    monkeypatch.setattr(
+        "shrecc._legacy_database.save_to_pickle", lambda obj, path: None
+    )
+    monkeypatch.setattr("shrecc._legacy_database.files", lambda pkg: tmp_path)
     result = tech_mapping(year, tmp_path)
     # Should not add any new row for load_difference_row (difference <= 0)
     load_difference_row = (
@@ -1534,6 +1554,7 @@ def test_map_known_inputs_basic(
     assert known_inputs[("FR", "Hydro", "kWh")] == "fr_hydro_result"
     assert ("GB", "Wind", "kWh") in known_inputs
     assert known_inputs[("GB", "Wind", "kWh")] == "gb_wind_result"
+    assert known_inputs[("UK", "Wind", "kWh")] == "gb_wind_result"
     # Assert network inputs
     assert (
         "GLO",
@@ -1596,6 +1617,99 @@ def test_map_known_inputs_empty_dataframe(
     # Assertions
     assert known_inputs == {}
     assert known_inputs_network == {}
+
+
+@patch("shrecc.database.get_network_activities", return_value=[])
+@patch("shrecc.database.Filter")
+@patch("shrecc.database.Query")
+@patch("shrecc.database.bd.Database")
+def test_map_known_inputs_uses_same_activity_at_fallback_location(
+    mock_database_cls,
+    mock_query_cls,
+    mock_filter_cls,
+    mock_get_network_activities,
+    capsys,
+):
+    activity = "electricity production, wind, 1-3MW turbine, offshore"
+    index = pd.MultiIndex.from_tuples(
+        [("ESC", activity, "electricity, high voltage", "kWh")]
+    )
+    dataframe = pd.DataFrame({"IT": [0.2]}, index=index)
+    mock_database_cls.return_value.load.return_value = object()
+
+    class DummyFilter:
+        def __init__(self, field, op, value):
+            self.field = field
+            self.value = value
+
+    mock_filter_cls.side_effect = DummyFilter
+
+    def fake_query_factory():
+        class Q:
+            def __init__(self):
+                self.filters = []
+
+            def add(self, item):
+                self.filters.append(item)
+
+            def __call__(self, data):
+                location = next(
+                    item.value for item in self.filters if item.field == "location"
+                )
+                if location == "RoW":
+                    return ["offshore-row-exchange"]
+                return []
+
+        return Q()
+
+    mock_query_cls.side_effect = fake_query_factory
+
+    known_inputs, _ = map_known_inputs(
+        "premise-db",
+        dataframe,
+        strict=True,
+        include_network=False,
+    )
+
+    assert known_inputs[("ESC", activity, "kWh")] == "offshore-row-exchange"
+    assert known_inputs[("RoW", activity, "kWh")] == "offshore-row-exchange"
+    assert "Using fallback activity" in capsys.readouterr().out
+    mock_get_network_activities.assert_not_called()
+
+
+@patch("shrecc.database.get_network_activities", return_value=[])
+@patch("shrecc.database.Filter")
+@patch("shrecc.database.Query")
+@patch("shrecc.database.bd.Database")
+def test_map_known_inputs_strict_raises_only_for_nonzero_rows(
+    mock_database_cls,
+    mock_query_cls,
+    mock_filter_cls,
+    mock_get_network_activities,
+):
+    index = pd.MultiIndex.from_tuples(
+        [
+            ("FR", "Required activity", "electricity", "kWh"),
+            ("DE", "Zero activity", "electricity", "kWh"),
+        ]
+    )
+    dataframe = pd.DataFrame({"ES": [1.0, 0.0]}, index=index)
+    mock_database_cls.return_value.load.return_value = object()
+    mock_query_cls.return_value.return_value = []
+
+    with pytest.raises(
+        ValueError,
+        match=r"Required activity, FR \(0 matches\)",
+    ) as exc:
+        map_known_inputs(
+            "premise-db",
+            dataframe,
+            strict=True,
+            include_network=False,
+        )
+
+    assert "Zero activity" not in str(exc.value)
+    mock_get_network_activities.assert_not_called()
 
 
 # ────────────────────────────────────────────────────────────────
@@ -1803,6 +1917,32 @@ def test_create_activity_dict_empty_dataframe():
     assert activities == {}
 
 
+@patch("shrecc.database.get_network_activities", return_value=[])
+def test_create_activity_dict_adds_year_to_name_and_metadata(
+    mock_get_network_activities,
+    known_inputs_fixture,
+):
+    index = pd.MultiIndex.from_tuples(
+        [("FR", "Hydro", "electricity, high voltage", "kWh")],
+        names=["source", "exch_name", "prod", "unit"],
+    )
+    dataframe = pd.DataFrame({"FR": [1.0]}, index=index)
+
+    activities = create_activity_dict(
+        dataframe,
+        known_inputs_fixture,
+        {},
+        "test_db",
+        year=2040,
+    )
+
+    activity = activities[("test_db", "electricity 0")]
+    assert activity["name"] == "Electricity mix in FR, 2040"
+    assert activity["year"] == 2040
+    assert activity["exchanges"][0]["name"] == activity["name"]
+    mock_get_network_activities.assert_called_once_with("test_db")
+
+
 # ────────────────────────────────────────────────────────────
 # Tests for: create_database() — requires multiple sub-tests
 # ────────────────────────────────────────────────────────────
@@ -1826,6 +1966,7 @@ def dataframe_filt_for_create_database():
     return pd.DataFrame(data, index=index, columns=columns)
 
 
+@patch("shrecc.database.bd.projects.set_current")
 @patch("shrecc.database.setup_database")
 @patch("shrecc.database.map_known_inputs")
 @patch("shrecc.database.create_activity_dict")
@@ -1833,6 +1974,7 @@ def test_create_database_with_network_true(
     mock_create_activity_dict,
     mock_map_known_inputs,
     mock_setup_database,
+    mock_set_current,
     dataframe_filt_for_create_database,
 ):
     # Prepare mocks
@@ -1854,16 +1996,26 @@ def test_create_database_with_network_true(
     )
 
     # Check calls
+    mock_set_current.assert_called_once_with("proj")
     mock_setup_database.assert_called_once_with("proj", "db")
     mock_map_known_inputs.assert_called_once_with(
-        "eidb", dataframe_filt_for_create_database
+        "eidb",
+        dataframe_filt_for_create_database,
+        strict=False,
+        include_network=True,
     )
     mock_create_activity_dict.assert_called_once_with(
-        dataframe_filt_for_create_database, known_inputs, known_inputs_network, "db"
+        dataframe_filt_for_create_database,
+        known_inputs,
+        known_inputs_network,
+        "db",
+        eidb_name="eidb",
+        year=None,
     )
     mock_db.write.assert_called_once_with(activities)
 
 
+@patch("shrecc.database.bd.projects.set_current")
 @patch("shrecc.database.setup_database")
 @patch("shrecc.database.map_known_inputs")
 @patch("shrecc.database.create_activity_dict")
@@ -1871,6 +2023,7 @@ def test_create_database_with_network_false(
     mock_create_activity_dict,
     mock_map_known_inputs,
     mock_setup_database,
+    mock_set_current,
     dataframe_filt_for_create_database,
 ):
     mock_db = MagicMock()
@@ -1890,15 +2043,23 @@ def test_create_database_with_network_false(
 
     mock_setup_database.assert_called_once_with("proj", "db")
     mock_map_known_inputs.assert_called_once_with(
-        "eidb", dataframe_filt_for_create_database
+        "eidb",
+        dataframe_filt_for_create_database,
+        strict=False,
+        include_network=False,
     )
-    # The third argument to create_activity_dict should be None (the _ from map_known_inputs)
     mock_create_activity_dict.assert_called_once_with(
-        dataframe_filt_for_create_database, known_inputs, None, "db"
+        dataframe_filt_for_create_database,
+        known_inputs,
+        None,
+        "db",
+        eidb_name="eidb",
+        year=None,
     )
     mock_db.write.assert_called_once_with(activities)
 
 
+@patch("shrecc.database.bd.projects.set_current")
 @patch("shrecc.database.setup_database")
 @patch("shrecc.database.map_known_inputs")
 @patch("shrecc.database.create_activity_dict")
@@ -1906,6 +2067,7 @@ def test_create_database_empty_activities(
     mock_create_activity_dict,
     mock_map_known_inputs,
     mock_setup_database,
+    mock_set_current,
     dataframe_filt_for_create_database,
 ):
     mock_db = MagicMock()
@@ -1924,3 +2086,30 @@ def test_create_database_empty_activities(
     )
 
     mock_db.write.assert_called_once_with({})
+
+
+@patch("shrecc.database.bd.projects.set_current")
+@patch("shrecc.database.setup_database")
+@patch("shrecc.database.map_known_inputs")
+@patch("shrecc.database.create_activity_dict")
+def test_create_database_strict_validates_before_replacing_output_database(
+    mock_create_activity_dict,
+    mock_map_known_inputs,
+    mock_setup_database,
+    mock_set_current,
+    dataframe_filt_for_create_database,
+):
+    mock_map_known_inputs.side_effect = ValueError("missing premise activity")
+
+    with pytest.raises(ValueError, match="missing premise activity"):
+        create_database(
+            dataframe_filt_for_create_database,
+            "proj",
+            "db",
+            "premise-db",
+            strict=True,
+        )
+
+    mock_setup_database.assert_not_called()
+    mock_create_activity_dict.assert_not_called()
+    mock_set_current.assert_called_once_with("proj")

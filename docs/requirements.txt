@@ -8,6 +8,7 @@
   sphinx-design # responsive web component support # https://anaconda.org/conda-forge/sphinx-design/files
   sphinx-copybutton # for copy button in code blocks # https://anaconda.org/conda-forge/sphinx-copybutton/files
   sphinx-autoapi # to build docs from source code instead of package import # https://anaconda.org/conda-forge/sphinx-autoapi/files
+  astroid<4 # sphinx-autoapi 3.5 is incompatible with astroid 4
   sphinx-notfound-page # custom 404 page # https://anaconda.org/conda-forge/sphinx-notfound-page/files
   # build process
   sphinx-autobuild # live-html support # https://anaconda.org/conda-forge/sphinx-autobuild/files
