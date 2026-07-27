@@ -17,4 +17,4 @@ from .database import create_database, filt_cutoff
 from .energy_charts import data_processing, get_data
 from .pipeline import NewDatabase
 
-__version__ = "0.1.0"
+__version__ = "0.1.0.dev1"
