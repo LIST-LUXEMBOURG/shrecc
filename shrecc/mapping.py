@@ -15,6 +15,7 @@ DEFAULT_FALLBACK_ACTIVITY = (
     "kWh",
 )
 DEFAULT_MAPPING_TIME_CHUNK_SIZE = 168
+VALID_CONSUMPTION_PROFILES = {"flat", "national_demand"}
 
 
 def _build_ecoinvent_mapping_operator(
@@ -177,6 +178,235 @@ def load_ecoinvent_mapping(mapping_location):
         index_col=[0, 1, 2, 3],
         header=[0, 1],
     )
+
+
+def validate_consumption_profile(consumption_profile):
+    """Validate and normalize an inventory consumption profile.
+
+    String profiles select built-in weighting behavior. A pandas Series
+    supplies custom, non-negative weights indexed by timestamp. Custom values
+    may be relative weights or physical consumption because aggregation
+    normalizes by their sum.
+
+    Args:
+        consumption_profile: ``"flat"``, ``"national_demand"``, or a pandas
+            Series with a unique DatetimeIndex.
+
+    Returns:
+        A normalized built-in profile name or a defensive float copy of the
+        custom Series.
+
+    Raises:
+        TypeError: If the profile is not a supported string or Series.
+        ValueError: If the profile name, index, or values are invalid.
+    """
+    if isinstance(consumption_profile, str):
+        normalized = consumption_profile.strip().lower()
+        if normalized not in VALID_CONSUMPTION_PROFILES:
+            raise ValueError(
+                "consumption_profile must be 'flat', 'national_demand', "
+                "or a pandas Series"
+            )
+        return normalized
+
+    if not isinstance(consumption_profile, pd.Series):
+        raise TypeError(
+            "consumption_profile must be 'flat', 'national_demand', "
+            "or a pandas Series"
+        )
+    if not isinstance(consumption_profile.index, pd.DatetimeIndex):
+        raise ValueError(
+            "A custom consumption_profile must use a pandas DatetimeIndex"
+        )
+    if consumption_profile.empty:
+        raise ValueError("A custom consumption_profile cannot be empty")
+    if consumption_profile.index.has_duplicates:
+        raise ValueError(
+            "A custom consumption_profile cannot contain duplicate timestamps"
+        )
+
+    try:
+        normalized = consumption_profile.astype(float).copy()
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "A custom consumption_profile must contain numeric values"
+        ) from exc
+
+    values = normalized.to_numpy()
+    if not np.isfinite(values).all():
+        raise ValueError(
+            "A custom consumption_profile cannot contain missing or "
+            "non-finite values"
+        )
+    if (values < 0).any():
+        raise ValueError(
+            "A custom consumption_profile cannot contain negative values"
+        )
+    return normalized
+
+
+def aggregate_consumption_mix(
+    consumption_mix,
+    *,
+    consumption_profile="flat",
+    consumption_volume=None,
+    countries=None,
+    times=None,
+    general_range=None,
+    refined_range=None,
+    freq=None,
+):
+    """Aggregate hourly canonical mixes using a consumption profile.
+
+    ``"flat"`` gives every selected hour equal weight.
+    ``"national_demand"`` weights each consumer country by its corresponding
+    hourly ``consumption_volume``. A custom Series supplies one common set of
+    timestamp weights for all consumer countries.
+
+    Time and country selection happen before weighting. The returned mix has
+    no time dimension and can therefore be mapped directly to background
+    activities without materializing an hourly activity array.
+
+    Args:
+        consumption_mix: Dimensionless canonical DataArray resolved by time,
+            consumer country, source country, and technology.
+        consumption_profile: Built-in profile name or custom pandas Series.
+        consumption_volume: Hourly volume DataArray required by
+            ``"national_demand"``.
+        countries: Optional consumer countries to include.
+        times: Optional exact timestamps to include.
+        general_range: Optional inclusive start and end timestamps.
+        refined_range: Optional inclusive clock-hour range.
+        freq: Frequency used to construct the refined selection.
+
+    Returns:
+        Profile-weighted, dimensionless canonical mix without a time dimension.
+
+    Raises:
+        ValueError: If dimensions, timestamp coverage, weights, or national
+            demand volumes are invalid.
+    """
+    required_dims = {
+        "time",
+        "consumer_country",
+        "source_country",
+        "technology",
+    }
+    missing_dims = required_dims.difference(consumption_mix.dims)
+    if missing_dims:
+        raise ValueError(
+            "consumption_mix is missing required dimensions: "
+            + ", ".join(sorted(missing_dims))
+        )
+
+    profile = validate_consumption_profile(consumption_profile)
+    selected = consumption_mix
+    if countries is not None:
+        selected = selected.sel(consumer_country=list(countries))
+    selected = filter_consumption_mix_time(
+        selected,
+        times=times,
+        general_range=general_range,
+        refined_range=refined_range,
+        freq=freq,
+    )
+
+    selected_times = selected["time"].to_index()
+    selected_countries = selected["consumer_country"].to_index()
+    if isinstance(profile, str) and profile == "flat":
+        weights = xr.DataArray(
+            np.ones(len(selected_times), dtype=float),
+            dims="time",
+            coords={"time": selected_times},
+            name="consumption_weight",
+        )
+        profile_name = "flat"
+    elif isinstance(profile, str) and profile == "national_demand":
+        if consumption_volume is None:
+            raise ValueError(
+                "consumption_volume is required when consumption_profile is "
+                "'national_demand'"
+            )
+        required_volume_dims = {"time", "consumer_country"}
+        missing_volume_dims = required_volume_dims.difference(
+            consumption_volume.dims
+        )
+        if missing_volume_dims:
+            raise ValueError(
+                "consumption_volume is missing required dimensions: "
+                + ", ".join(sorted(missing_volume_dims))
+            )
+        try:
+            weights = consumption_volume.sel(
+                time=selected_times,
+                consumer_country=selected_countries,
+            ).astype(float)
+        except KeyError as exc:
+            raise ValueError(
+                "consumption_volume does not cover all selected timestamps "
+                "and consumer countries"
+            ) from exc
+        profile_name = "national_demand"
+    else:
+        if selected_times.tz != profile.index.tz:
+            raise ValueError(
+                "Custom consumption_profile timestamps and SHRECC timestamps "
+                "must use the same timezone"
+            )
+        missing_times = selected_times.difference(profile.index)
+        if not missing_times.empty:
+            examples = ", ".join(map(str, missing_times[:5]))
+            raise ValueError(
+                "Custom consumption_profile is missing selected timestamps: "
+                + examples
+            )
+        weights = xr.DataArray(
+            profile.reindex(selected_times).to_numpy(dtype=float),
+            dims="time",
+            coords={"time": selected_times},
+            name="consumption_weight",
+        )
+        profile_name = "custom"
+
+    weight_values = weights.to_numpy()
+    if not np.isfinite(weight_values).all():
+        raise ValueError("Selected consumption weights must be finite")
+    if (weight_values < 0).any():
+        raise ValueError("Selected consumption weights cannot be negative")
+
+    weight_totals = weights.sum("time")
+    zero_totals = weight_totals <= 0
+    if bool(zero_totals.any()):
+        if "consumer_country" in zero_totals.dims:
+            countries_without_weight = (
+                zero_totals["consumer_country"].where(zero_totals, drop=True)
+            )
+            details = ": " + ", ".join(
+                map(str, countries_without_weight.to_numpy())
+            )
+        else:
+            details = ""
+        raise ValueError(
+            "Selected consumption weights must sum to more than zero" + details
+        )
+
+    if profile_name == "flat":
+        aggregated = selected.mean("time")
+    else:
+        normalized_weights = weights / weight_totals
+        aggregated = xr.dot(selected, normalized_weights, dim="time")
+        aggregated = aggregated.transpose(
+            "consumer_country",
+            "source_country",
+            "technology",
+        )
+    aggregated = aggregated.rename("consumption_mix")
+    aggregated.attrs.update(consumption_mix.attrs)
+    aggregated.attrs["unit"] = "dimensionless"
+    aggregated.attrs["consumption_profile"] = profile_name
+    if profile_name == "custom" and profile.name is not None:
+        aggregated.attrs["consumption_profile_name"] = str(profile.name)
+    return aggregated
 
 
 def map_consumption_mix_to_ecoinvent_activities(

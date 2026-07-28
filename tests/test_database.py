@@ -1918,7 +1918,7 @@ def test_create_activity_dict_empty_dataframe():
 
 
 @patch("shrecc.database.get_network_activities", return_value=[])
-def test_create_activity_dict_adds_year_to_name_and_metadata(
+def test_create_activity_dict_adds_year_and_profile_to_metadata(
     mock_get_network_activities,
     known_inputs_fixture,
 ):
@@ -1934,11 +1934,13 @@ def test_create_activity_dict_adds_year_to_name_and_metadata(
         {},
         "test_db",
         year=2040,
+        consumption_profile="national_demand",
     )
 
     activity = activities[("test_db", "electricity 0")]
     assert activity["name"] == "Electricity mix in FR, 2040"
     assert activity["year"] == 2040
+    assert activity["consumption_profile"] == "national_demand"
     assert activity["exchanges"][0]["name"] == activity["name"]
     mock_get_network_activities.assert_called_once_with("test_db")
 
@@ -1993,6 +1995,8 @@ def test_create_database_with_network_true(
         "db",
         "eidb",
         network="True",
+        year=2040,
+        consumption_profile="national_demand",
     )
 
     # Check calls
@@ -2010,7 +2014,8 @@ def test_create_database_with_network_true(
         known_inputs_network,
         "db",
         eidb_name="eidb",
-        year=None,
+        year=2040,
+        consumption_profile="national_demand",
     )
     mock_db.write.assert_called_once_with(activities)
 
@@ -2055,6 +2060,7 @@ def test_create_database_with_network_false(
         "db",
         eidb_name="eidb",
         year=None,
+        consumption_profile=None,
     )
     mock_db.write.assert_called_once_with(activities)
 

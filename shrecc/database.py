@@ -366,6 +366,7 @@ def create_activity_dict(
     db_name,
     eidb_name=None,
     year=None,
+    consumption_profile=None,
 ):
     """
     Creates a dictionary of activities for the BW database based on the filtered dataframe and known inputs.
@@ -380,6 +381,8 @@ def create_activity_dict(
         year (int, optional): Model year stored on each activity and included in
             its name. If a time-indexed column already contains the year, the
             name is left unchanged to avoid repeating it.
+        consumption_profile (str, optional): Temporal weighting represented by
+            the foreground inventory, stored as activity metadata.
 
     Returns:
         dict: A dictionary containing activities to be written to the BW2 database.
@@ -420,6 +423,8 @@ def create_activity_dict(
         }
         if activity_year is not None:
             act["year"] = activity_year
+        if consumption_profile is not None:
+            act["consumption_profile"] = str(consumption_profile)
         # Add the production exchange
         act["exchanges"].append(
             {
@@ -539,6 +544,7 @@ def create_database(
     network=True,
     strict=False,
     year=None,
+    consumption_profile=None,
 ):
     """
     Creates an "ecoinvent-like" BW database based on a previously filtered dataframe.
@@ -555,6 +561,8 @@ def create_database(
             cannot be matched uniquely.
         year (int, optional): Model year included in foreground activity names
             and stored as activity metadata.
+        consumption_profile (str, optional): Temporal weighting stored as
+            foreground activity metadata.
 
     Returns:
         None
@@ -576,6 +584,7 @@ def create_database(
         db_name,
         eidb_name=eidb_name,
         year=year,
+        consumption_profile=consumption_profile,
     )
     elec_db = setup_database(project_name, db_name)
     elec_db.write(activities)

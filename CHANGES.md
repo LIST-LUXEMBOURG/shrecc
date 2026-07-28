@@ -1,6 +1,35 @@
 SHRECC CHANGELOG
 ================
 
+## Unreleased
+
+### Added
+
+- Add `consumption_profile` to `NewDatabase`, with equal hourly weighting
+  through `"flat"`, country-specific volume weighting through
+  `"national_demand"`, and custom timestamp weights supplied as a pandas
+  Series. `"flat"` remains the backwards-compatible default.
+- Validate custom profiles for timestamp uniqueness, finite non-negative
+  weights, source-data coverage, and positive totals. A profile contained
+  within one calendar year is reusable as a template for every configured
+  model year.
+- Record the selected consumption-profile method as metadata on written
+  Brightway foreground activities.
+
+### Changed
+
+- Aggregate selected canonical consumption mixes with their profile weights
+  before mapping activities. This is algebraically equivalent to aggregating
+  mapped hourly results while avoiding large hourly activity arrays.
+- Let a custom Series define the modeled timestamps. Explicit `times`,
+  `time_range`, and `hour_range` arguments are ignored with a warning.
+- Drop February 29 with a warning when a custom profile is rebased to a
+  non-leap model year, and drop unavailable TYNDP December 31 timestamps with
+  a warning instead of treating them as zero consumption.
+- Rebase multi-year temporal selections safely across leap and non-leap years:
+  clip February 29 range boundaries to February 28 while dropping invalid
+  explicit February 29 timestamps, with warnings in both cases.
+
 ## 0.1.0 - 2026-07-22
 
 This release unifies historical SHRECC and prospective TYNDP/FIONA processing

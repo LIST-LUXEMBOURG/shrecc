@@ -16,9 +16,11 @@ from shrecc.energy_charts import (
 )
 from shrecc.mapping import (
     activity_mix_to_database_table,
+    aggregate_consumption_mix,
     load_ecoinvent_mapping,
     map_consumption_mix_to_ecoinvent_activities,
     mapping_gap_to_report,
+    validate_consumption_profile,
 )
 from shrecc.premise_mapping import (
     PremiseConsumptionMixMapper,
@@ -82,10 +84,13 @@ class NewDatabase:
             ``"remind-eu"``.
         time_range: Two timestamps defining an inclusive period. For a
             multi-year run, their month, day, and time are reused in each year.
+            A February 29 boundary is clipped to February 28 in non-leap years.
+            Ignored with a warning when a custom consumption Series is used.
         hour_range: Optional inclusive daily hour range within ``time_range``,
-            for example ``[10, 14]``.
+            for example ``[10, 14]``. Ignored with a custom Series.
         times: Exact, potentially disconnected timestamps to select instead of
-            ``time_range``.
+            ``time_range``. Explicit February 29 timestamps are dropped when
+            reused in non-leap years. Ignored with a custom Series.
         source: ``"auto"``, ``"energy_charts"``, or ``"tyndp"``.
         cutoff: Minimum activity share retained as an individual row.
         include_cutoff: If true, combine shares below ``cutoff`` into a
@@ -96,6 +101,13 @@ class NewDatabase:
             infrastructure exchanges in the written inventories.
         zero_consumption: Treatment of zero-consumption TYNDP country-hours:
             ``"keep_zero"``, ``"month_hour_average"``, or ``"raise"``.
+        consumption_profile: Temporal weighting used to aggregate the selected
+            hourly consumption mixes. Use ``"flat"`` for equal hourly
+            weighting, ``"national_demand"`` for country-specific demand
+            weighting, or a pandas Series of custom timestamp weights. A
+            custom Series defines its own timestamps and a Series contained
+            within one calendar year is reused as a template for every model
+            year.
         include_consumption_mix_volume: Retain the resolved four-dimensional
             consumption volumes as well as normalized shares. Disable this to
             reduce memory and cache size when only inventory shares are needed.
@@ -111,11 +123,13 @@ class NewDatabase:
         check: Run conservation and consistency checks during calculation.
         verbose: Print progress information.
 
-    After creation, intermediate and final objects remain available by year in
-    ``consumption_results``, ``activity_mixes``, and ``database_tables``. The
-    historical pre-cutoff diagnostics are retained in ``mapping_gap_reports``;
-    :meth:`mapping_report` returns a defensive copy. Successfully written
-    output names are recorded in ``written_database_names``.
+    After creation, hourly canonical results remain available in
+    ``consumption_results``. The profile-weighted mapped inventories and final
+    tables are available by year in ``activity_mixes`` and
+    ``database_tables``. Historical pre-cutoff diagnostics are retained in
+    ``mapping_gap_reports``; :meth:`mapping_report` returns a defensive copy.
+    Successfully written output names are recorded in
+    ``written_database_names``.
 
     Examples:
         >>> electricity = NewDatabase(
@@ -155,6 +169,7 @@ class NewDatabase:
         strict=False,
         network=True,
         zero_consumption="month_hour_average",
+        consumption_profile="flat",
         include_consumption_mix_volume=True,
         data_dir=None,
         technology_mapping=None,
@@ -178,10 +193,27 @@ class NewDatabase:
                 "source must be one of: " + ", ".join(sorted(VALID_SOURCES))
             )
 
-        self.time_range = time_range
-        self.hour_range = hour_range
-        self.times = times
-        _validate_time_selection(time_range, hour_range, times)
+        self.consumption_profile = validate_consumption_profile(
+            consumption_profile
+        )
+        _validate_time_selection(
+            time_range,
+            hour_range,
+            times,
+            custom_profile=isinstance(self.consumption_profile, pd.Series),
+        )
+        if isinstance(self.consumption_profile, pd.Series):
+            self.time_range = None
+            self.hour_range = None
+            self.times = None
+        else:
+            self.time_range = time_range
+            self.hour_range = hour_range
+            self.times = times
+        self._consumption_profiles_by_year = _resolve_consumption_profiles(
+            self.consumption_profile,
+            self.years,
+        )
 
         self.cutoff = float(cutoff)
         if self.cutoff < 0:
@@ -256,8 +288,8 @@ class NewDatabase:
         """Prepare mapped inventory tables without changing Brightway.
 
         Source data are acquired or loaded from cache, the interconnected
-        electricity system is solved, technologies are mapped to background
-        activities, the requested times are aggregated, and the cutoff is
+        electricity system is solved, the requested times are profile-weighted,
+        technologies are mapped to background activities, and the cutoff is
         applied. Existing results on this object are replaced, so calling this
         method again rebuilds every configured year and can fill newly cached
         source data.
@@ -309,6 +341,7 @@ class NewDatabase:
                 network=self.network,
                 strict=self.strict,
                 year=year,
+                consumption_profile=self._consumption_profile_label(),
             )
             self.written_database_names[year] = self.database_names[year]
         return self
@@ -354,11 +387,12 @@ class NewDatabase:
     def mapping_report(self, year=None):
         """Return source technologies that required fallback mapping.
 
-        The report is calculated after time selection but before cutoff. Rows
-        identify ``(source_country, technology)`` and columns identify consumer
-        countries. Each value is the mean share of that consumer's mix assigned
-        to a source-country high-voltage production mix because no direct
-        activity mapping was available.
+        The report is calculated after time selection and consumption-profile
+        weighting but before cutoff. Rows identify
+        ``(source_country, technology)`` and columns identify consumer
+        countries. Each value is the share of that consumer's inventory
+        assigned to a source-country high-voltage production mix because no
+        direct activity mapping was available.
 
         TYNDP mappings are validated during creation and therefore return an
         empty report instead of using this historical-data fallback.
@@ -381,6 +415,7 @@ class NewDatabase:
 
     def _create_energy_charts_year(self, year):
         data_root = self._data_root()
+        consumption_profile = self._consumption_profiles_by_year[year]
         cache_dir = consumption_result_cache_path(data_root, year)
         if not (cache_dir / MANIFEST_FILENAME).is_file():
             data = get_energy_charts_data(
@@ -441,6 +476,12 @@ class NewDatabase:
                     "Rebuilt Energy Charts cache is still missing required "
                     "countries: " + ", ".join(sorted(remaining_missing))
                 )
+        _validate_custom_profile_source_coverage(
+            consumption_profile,
+            results["consumption_mix"]["time"].to_index(),
+            source_name="Energy Charts",
+            year=year,
+        )
         if (
             self.include_consumption_mix_volume
             and "consumption_mix_volume" not in results
@@ -449,12 +490,19 @@ class NewDatabase:
                 results["consumption_mix"] * results["consumption_volume"]
             ).assign_attrs(unit=results.attrs.get("volume_unit", "MWh"))
 
-        activity_mapping = load_ecoinvent_mapping(Path(self.ecoinvent_mapping))
-        selected_consumption_mix = results["consumption_mix"].sel(
-            consumer_country=list(self.countries)
+        aggregated_consumption_mix = aggregate_consumption_mix(
+            results["consumption_mix"],
+            consumption_profile=consumption_profile,
+            consumption_volume=results["consumption_volume"],
+            countries=self.countries,
+            general_range=time_range,
+            refined_range=self.hour_range,
+            freq="h",
+            times=times,
         )
+        activity_mapping = load_ecoinvent_mapping(Path(self.ecoinvent_mapping))
         activity_mix, mapping_gaps = map_consumption_mix_to_ecoinvent_activities(
-            selected_consumption_mix,
+            aggregated_consumption_mix,
             activity_mapping,
             check=self.check,
             return_mapping_gaps=True,
@@ -462,10 +510,6 @@ class NewDatabase:
         mapping_report = mapping_gap_to_report(
             mapping_gaps,
             countries=self.countries,
-            general_range=time_range,
-            refined_range=self.hour_range,
-            freq="h",
-            times=times,
         )
         self.mapping_gaps[year] = mapping_gaps
         self.mapping_gap_reports[year] = mapping_report
@@ -473,14 +517,11 @@ class NewDatabase:
         table = activity_mix_to_database_table(
             activity_mix,
             countries=self.countries,
-            general_range=time_range,
-            refined_range=self.hour_range,
-            freq="h",
-            times=times,
         )
         self._store_year(year, results, activity_mix, table)
 
     def _create_tyndp_year(self, year):
+        consumption_profile = self._consumption_profiles_by_year[year]
         time_range, times = self._selection_for_year(year)
         Z_gross = build_z_gross_from_tyndp_scenario(
             scenario=self.scenario,
@@ -500,6 +541,13 @@ class NewDatabase:
             year=year,
             climate_year=self.climate_year,
         )
+        if isinstance(consumption_profile, pd.Series):
+            consumption_profile = _adapt_profile_to_tyndp_times(
+                consumption_profile,
+                Z_gross.index,
+                year=year,
+            )
+            times = _positive_profile_times(consumption_profile, year)
         Z_gross = _select_dataframe_times(
             Z_gross,
             time_range=time_range,
@@ -513,6 +561,17 @@ class NewDatabase:
             include_consumption_mix_volume=(self.include_consumption_mix_volume),
         )
 
+        aggregated_consumption_mix = aggregate_consumption_mix(
+            results["consumption_mix"],
+            consumption_profile=consumption_profile,
+            consumption_volume=results["consumption_volume"],
+            countries=self.countries,
+            general_range=time_range,
+            refined_range=self.hour_range,
+            freq="h",
+            times=times,
+        )
+
         mapper = PremiseConsumptionMixMapper(
             technology_mapping=self.technology_mapping,
             ecoinvent_mapping=self.ecoinvent_mapping,
@@ -521,7 +580,7 @@ class NewDatabase:
             on_missing_model="warn",
         )
         activity_mix = mapper.map_technologies(
-            results["consumption_mix"],
+            aggregated_consumption_mix,
             check=self.check,
         )
         exchange_geography_map = mapper.build_exchange_geography_map(activity_mix)
@@ -529,10 +588,6 @@ class NewDatabase:
             activity_mix,
             exchange_geography_map,
             countries=self.countries,
-            general_range=time_range,
-            refined_range=self.hour_range,
-            freq="h",
-            times=times,
         )
         self.exchange_geography_maps[year] = exchange_geography_map
         self.mapping_gap_reports[year] = pd.DataFrame(
@@ -559,7 +614,7 @@ class NewDatabase:
         )
         warnings.warn(
             f"Energy Charts activity mapping gaps for {year} were assigned "
-            "to source-country high-voltage production mixes. Mean fallback "
+            "to source-country high-voltage production mixes. Fallback "
             f"share by consumer: {consumer_summary}. Largest source-technology "
             f"gaps: {gap_summary}. See mapping_report({year}) for the full "
             "report.",
@@ -580,6 +635,13 @@ class NewDatabase:
             return self.source
         return "tyndp" if year in PROSPECTIVE_YEARS else "energy_charts"
 
+    def _consumption_profile_label(self):
+        if isinstance(self.consumption_profile, str):
+            return self.consumption_profile
+        if self.consumption_profile.name is None:
+            return "custom"
+        return f"custom: {self.consumption_profile.name}"
+
     def _data_root(self):
         if self.data_dir is not None:
             return self.data_dir
@@ -589,6 +651,10 @@ class NewDatabase:
         return self._data_root() / "tyndp" / "cache"
 
     def _selection_for_year(self, year):
+        consumption_profile = self._consumption_profiles_by_year[year]
+        if isinstance(consumption_profile, pd.Series):
+            return None, _positive_profile_times(consumption_profile, year)
+
         if self.time_range is not None:
             timestamps = pd.to_datetime(self.time_range)
             if len(self.years) == 1:
@@ -597,8 +663,14 @@ class NewDatabase:
                         f"time_range timestamps must belong to year {year}"
                     )
             else:
-                timestamps = pd.DatetimeIndex(
-                    [timestamp.replace(year=year) for timestamp in timestamps]
+                timestamps = _rebase_time_range(
+                    timestamps,
+                    year,
+                )
+            if timestamps[-1] < timestamps[0]:
+                raise ValueError(
+                    "time_range end must not precede its start after "
+                    f"rebasing to {year}"
                 )
             return list(timestamps), None
 
@@ -607,9 +679,7 @@ class NewDatabase:
             if any(timestamp.year != year for timestamp in timestamps):
                 raise ValueError(f"times must belong to year {year}")
         else:
-            timestamps = pd.DatetimeIndex(
-                [timestamp.replace(year=year) for timestamp in timestamps]
-            )
+            timestamps = _rebase_explicit_times(timestamps, year)
         return None, timestamps
 
     def _resolve_result_year(self, year):
@@ -681,7 +751,31 @@ def _resolve_year_values(value, years, name, allow_automatic_suffix):
     )
 
 
-def _validate_time_selection(time_range, hour_range, times):
+def _validate_time_selection(
+    time_range,
+    hour_range,
+    times,
+    *,
+    custom_profile=False,
+):
+    if custom_profile:
+        ignored = [
+            name
+            for name, value in (
+                ("times", times),
+                ("time_range", time_range),
+                ("hour_range", hour_range),
+            )
+            if value is not None
+        ]
+        if ignored:
+            warnings.warn(
+                "A custom consumption_profile defines its timestamps. "
+                "Ignoring: " + ", ".join(ignored) + ".",
+                stacklevel=3,
+            )
+        return
+
     if time_range is None and times is None:
         raise ValueError("Either time_range or times must be provided")
     if time_range is not None and times is not None:
@@ -700,6 +794,177 @@ def _validate_time_selection(time_range, hour_range, times):
             raise ValueError(
                 "hour_range must contain inclusive hours between 0 and 23"
             )
+
+
+def _resolve_consumption_profiles(consumption_profile, years):
+    if isinstance(consumption_profile, str):
+        return {year: consumption_profile for year in years}
+
+    profile_years = pd.Index(consumption_profile.index.year).unique()
+    if len(profile_years) == 1:
+        return {
+            year: _rebase_consumption_profile(consumption_profile, year)
+            for year in years
+        }
+
+    configured_years = set(years)
+    available_years = set(map(int, profile_years))
+    missing_years = configured_years.difference(available_years)
+    if missing_years:
+        raise ValueError(
+            "Custom multi-year consumption_profile is missing configured "
+            "years: " + ", ".join(map(str, sorted(missing_years)))
+        )
+    extra_years = available_years.difference(configured_years)
+    if extra_years:
+        warnings.warn(
+            "Custom consumption_profile contains years that are not "
+            "configured and will be ignored: "
+            + ", ".join(map(str, sorted(extra_years))),
+            stacklevel=3,
+        )
+    return {
+        year: consumption_profile.loc[
+            consumption_profile.index.year == year
+        ].copy()
+        for year in years
+    }
+
+
+def _rebase_time_range(timestamps, year):
+    rebased = []
+    clipped_february_29 = 0
+    for timestamp in timestamps:
+        try:
+            rebased.append(timestamp.replace(year=year))
+        except ValueError:
+            if timestamp.month != 2 or timestamp.day != 29:
+                raise
+            rebased.append(timestamp.replace(year=year, day=28))
+            clipped_february_29 += 1
+
+    if clipped_february_29:
+        warnings.warn(
+            f"Clipped {clipped_february_29} February 29 time_range "
+            f"boundary timestamp(s) to February 28 for non-leap model "
+            f"year {year}.",
+            stacklevel=3,
+        )
+    return pd.DatetimeIndex(rebased)
+
+
+def _rebase_explicit_times(timestamps, year):
+    rebased = []
+    dropped_february_29 = 0
+    for timestamp in timestamps:
+        try:
+            rebased.append(timestamp.replace(year=year))
+        except ValueError:
+            if timestamp.month != 2 or timestamp.day != 29:
+                raise
+            dropped_february_29 += 1
+
+    if dropped_february_29:
+        warnings.warn(
+            f"Dropped {dropped_february_29} explicit February 29 "
+            f"timestamp(s) while rebasing to non-leap model year {year}.",
+            stacklevel=3,
+        )
+    if not rebased:
+        raise ValueError(
+            f"No explicit times remain after rebasing to model year {year}"
+        )
+    return pd.DatetimeIndex(rebased)
+
+
+def _rebase_consumption_profile(consumption_profile, year):
+    reference_year = int(consumption_profile.index.year[0])
+    if reference_year == year:
+        return consumption_profile.copy()
+
+    rebased_timestamps = []
+    retained_positions = []
+    dropped_february_29 = 0
+    for position, timestamp in enumerate(consumption_profile.index):
+        try:
+            rebased = timestamp.replace(year=year)
+        except ValueError:
+            if timestamp.month == 2 and timestamp.day == 29:
+                dropped_february_29 += 1
+                continue
+            raise
+        retained_positions.append(position)
+        rebased_timestamps.append(rebased)
+
+    if dropped_february_29:
+        warnings.warn(
+            f"Dropped {dropped_february_29} February 29 custom-profile "
+            f"timestamp(s) while rebasing from {reference_year} to "
+            f"non-leap model year {year}.",
+            stacklevel=4,
+        )
+
+    rebased_profile = consumption_profile.iloc[retained_positions].copy()
+    rebased_profile.index = pd.DatetimeIndex(
+        rebased_timestamps,
+        name=consumption_profile.index.name,
+    )
+    return rebased_profile
+
+
+def _positive_profile_times(consumption_profile, year):
+    positive = consumption_profile[consumption_profile > 0]
+    if positive.empty:
+        raise ValueError(
+            f"Custom consumption_profile has no positive weights for {year}"
+        )
+    return positive.index
+
+
+def _validate_custom_profile_source_coverage(
+    consumption_profile,
+    available_times,
+    *,
+    source_name,
+    year,
+):
+    if not isinstance(consumption_profile, pd.Series):
+        return
+    requested_times = _positive_profile_times(consumption_profile, year)
+    missing_times = requested_times.difference(pd.DatetimeIndex(available_times))
+    if missing_times.empty:
+        return
+    examples = ", ".join(map(str, missing_times[:5]))
+    raise ValueError(
+        f"{source_name} data for {year} do not contain positive-weight custom "
+        "consumption_profile timestamps: " + examples
+    )
+
+
+def _adapt_profile_to_tyndp_times(consumption_profile, available_times, *, year):
+    available_times = pd.DatetimeIndex(available_times)
+    missing_times = consumption_profile.index.difference(available_times)
+    if missing_times.empty:
+        return consumption_profile
+
+    december_31 = missing_times[
+        (missing_times.month == 12) & (missing_times.day == 31)
+    ]
+    if not december_31.empty:
+        warnings.warn(
+            f"TYNDP data for {year} do not include December 31; dropped "
+            f"{len(december_31)} custom-profile timestamp(s) from that day.",
+            stacklevel=3,
+        )
+        consumption_profile = consumption_profile.drop(december_31)
+
+    _validate_custom_profile_source_coverage(
+        consumption_profile,
+        available_times,
+        source_name="TYNDP",
+        year=year,
+    )
+    return consumption_profile
 
 
 def _select_dataframe_times(dataframe, *, time_range, times):
