@@ -15,6 +15,12 @@ SHRECC CHANGELOG
   model year.
 - Record the selected consumption-profile method as metadata on written
   Brightway foreground activities.
+- Add reusable analysis helpers for resolving delivered electricity to
+  generation technologies and comparing SHRECC mixes and LCIA scores with
+  ecoinvent or premise backgrounds.
+- Add `retain_hourly_results=False` as a memory-efficient database-building
+  mode when canonical hourly datasets do not need to remain on the
+  `NewDatabase` object.
 
 ### Changed
 
@@ -29,6 +35,9 @@ SHRECC CHANGELOG
 - Rebase multi-year temporal selections safely across leap and non-leap years:
   clip February 29 range boundaries to February 28 while dropping invalid
   explicit February 29 timestamps, with warnings in both cases.
+- Reuse the shared analysis helpers in the annual-validation and
+  consumption-profile notebooks, and disable optional four-dimensional volume
+  results there to avoid multi-gigabyte duplicate arrays.
 
 ## 0.1.0 - 2026-07-22
 

@@ -111,6 +111,9 @@ class NewDatabase:
         include_consumption_mix_volume: Retain the resolved four-dimensional
             consumption volumes as well as normalized shares. Disable this to
             reduce memory and cache size when only inventory shares are needed.
+        retain_hourly_results: Keep canonical hourly result datasets on this
+            object after aggregation. Disable this for memory-efficient
+            database creation when only mapped tables and reports are needed.
         data_dir: Optional local cache directory. The platform-specific SHRECC
             user-data directory is used by default.
         technology_mapping: Optional replacement TYNDP technology concordance.
@@ -124,12 +127,12 @@ class NewDatabase:
         verbose: Print progress information.
 
     After creation, hourly canonical results remain available in
-    ``consumption_results``. The profile-weighted mapped inventories and final
-    tables are available by year in ``activity_mixes`` and
-    ``database_tables``. Historical pre-cutoff diagnostics are retained in
-    ``mapping_gap_reports``; :meth:`mapping_report` returns a defensive copy.
-    Successfully written output names are recorded in
-    ``written_database_names``.
+    ``consumption_results`` unless ``retain_hourly_results=False``. The
+    profile-weighted mapped inventories and final tables are available by year
+    in ``activity_mixes`` and ``database_tables``. Historical pre-cutoff
+    diagnostics are retained in ``mapping_gap_reports``;
+    :meth:`mapping_report` returns a defensive copy. Successfully written
+    output names are recorded in ``written_database_names``.
 
     Examples:
         >>> electricity = NewDatabase(
@@ -171,6 +174,7 @@ class NewDatabase:
         zero_consumption="month_hour_average",
         consumption_profile="flat",
         include_consumption_mix_volume=True,
+        retain_hourly_results=True,
         data_dir=None,
         technology_mapping=None,
         country_mapping=None,
@@ -223,6 +227,7 @@ class NewDatabase:
         self.network = network
         self.zero_consumption = zero_consumption
         self.include_consumption_mix_volume = bool(include_consumption_mix_volume)
+        self.retain_hourly_results = bool(retain_hourly_results)
         self.download = bool(download)
         self.engine = engine
         self.check = bool(check)
@@ -376,10 +381,16 @@ class NewDatabase:
             Canonical xarray Dataset before activity mapping and cutoff.
 
         Raises:
-            RuntimeError: If :meth:`create` has not prepared the results.
+            RuntimeError: If :meth:`create` has not prepared the results or
+                hourly results were not retained.
             ValueError: If ``year`` is omitted for a multi-year object.
         """
         year = self._resolve_result_year(year)
+        if not self.retain_hourly_results:
+            raise RuntimeError(
+                "Hourly results were not retained. Initialize NewDatabase "
+                "with retain_hourly_results=True to access results()."
+            )
         if year not in self.consumption_results:
             raise RuntimeError("create() must be called before accessing results")
         return self.consumption_results[year]
@@ -622,7 +633,8 @@ class NewDatabase:
         )
 
     def _store_year(self, year, results, activity_mix, table):
-        self.consumption_results[year] = results
+        if self.retain_hourly_results:
+            self.consumption_results[year] = results
         self.activity_mixes[year] = activity_mix
         self.database_tables[year] = apply_cutoff(
             table,

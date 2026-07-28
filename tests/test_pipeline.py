@@ -397,6 +397,56 @@ def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch)
     )
 
 
+def test_create_can_release_hourly_results_after_aggregation(monkeypatch):
+    year = 2040
+    times = pd.date_range(f"{year}-06-01 10:00", periods=2, freq="h")
+    results = _canonical_results(year)
+    solve = MagicMock(return_value=results)
+    mapper = MagicMock()
+    mapper.map_technologies.return_value = _premise_activity_mix(year)
+    mapper.build_exchange_geography_map.return_value = pd.DataFrame(
+        {"FR": ["FR"]},
+        index=pd.Index(["wind activity"], name="premise_activity"),
+    )
+
+    monkeypatch.setattr(
+        "shrecc.pipeline.build_z_gross_from_tyndp_scenario",
+        MagicMock(return_value=pd.DataFrame({"value": [1.0, 2.0]}, index=times)),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.consumption_results_from_z_gross",
+        solve,
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.PremiseConsumptionMixMapper",
+        MagicMock(return_value=mapper),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.premise_activity_mix_to_database_table",
+        MagicMock(return_value=_database_table()),
+    )
+
+    database = NewDatabase(
+        scenario="DE",
+        years=year,
+        climate_year=2009,
+        bg_db_name="premise-remind-eu-2040",
+        my_db_name="shrecc_DE_2040",
+        countries=["FR"],
+        time_range=[times[0], times[-1]],
+        project_name="project",
+        include_cutoff=False,
+        include_consumption_mix_volume=False,
+        retain_hourly_results=False,
+    ).create()
+
+    assert database.consumption_results == {}
+    assert database.table().equals(_database_table())
+    assert solve.call_args.kwargs["include_consumption_mix_volume"] is False
+    with pytest.raises(RuntimeError, match="were not retained"):
+        database.results()
+
+
 def test_prospective_create_reports_countries_absent_from_tyndp_before_solving(
     monkeypatch,
 ):
