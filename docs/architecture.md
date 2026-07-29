@@ -43,6 +43,8 @@ Brightway database
   construction/writing.
 - `pipeline.py`: The public `NewDatabase` workflow and inspectable pipeline
   state.
+- `analysis.py`: Delivered-electricity graph resolution and reusable
+  foreground/background mix and LCIA comparisons.
 - `treatment.py`: Compatibility facade for historical treatment imports.
 - `_legacy_treatment.py`, `_legacy_database.py`, and `_legacy_tyndp.py`:
   isolated reference implementations retained for compatibility and regression

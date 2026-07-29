@@ -1,12 +1,15 @@
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
 from shrecc.mapping import (
     activity_mix_to_database_table,
+    aggregate_consumption_mix,
     load_ecoinvent_mapping,
     map_consumption_mix_to_ecoinvent_activities,
     mapping_gap_to_report,
+    validate_consumption_profile,
 )
 
 
@@ -56,6 +59,165 @@ def _activity_mapping():
         names=["country", "technology"],
     )
     return pd.DataFrame([[0.75], [0.25]], index=index, columns=columns)
+
+
+def _profile_inputs():
+    times = pd.date_range("2040-01-01", periods=2, freq="h")
+    consumption_mix = xr.DataArray(
+        [
+            [
+                [[1.0], [0.0]],
+                [[0.2], [0.8]],
+            ],
+            [
+                [[0.0], [1.0]],
+                [[0.6], [0.4]],
+            ],
+        ],
+        dims=("time", "consumer_country", "source_country", "technology"),
+        coords={
+            "time": times,
+            "consumer_country": ["FR", "DE"],
+            "source_country": ["domestic", "imported"],
+            "technology": ["electricity"],
+        },
+        name="consumption_mix",
+    )
+    consumption_volume = xr.DataArray(
+        [[1.0, 3.0], [3.0, 1.0]],
+        dims=("time", "consumer_country"),
+        coords={
+            "time": times,
+            "consumer_country": ["FR", "DE"],
+        },
+        name="consumption_volume",
+    )
+    return consumption_mix, consumption_volume
+
+
+def test_flat_profile_is_the_arithmetic_mean_of_hourly_mixes():
+    consumption_mix, consumption_volume = _profile_inputs()
+
+    aggregated = aggregate_consumption_mix(
+        consumption_mix,
+        consumption_profile="flat",
+        consumption_volume=consumption_volume,
+    )
+
+    xr.testing.assert_allclose(aggregated, consumption_mix.mean("time"))
+    assert "time" not in aggregated.dims
+    assert aggregated.attrs["consumption_profile"] == "flat"
+
+
+def test_national_demand_profile_weights_each_consumer_country_separately():
+    consumption_mix, consumption_volume = _profile_inputs()
+
+    aggregated = aggregate_consumption_mix(
+        consumption_mix,
+        consumption_profile="national_demand",
+        consumption_volume=consumption_volume,
+    )
+
+    np.testing.assert_allclose(
+        aggregated.sel(consumer_country="FR").to_numpy().ravel(),
+        [0.25, 0.75],
+    )
+    np.testing.assert_allclose(
+        aggregated.sel(consumer_country="DE").to_numpy().ravel(),
+        [0.3, 0.7],
+    )
+    np.testing.assert_allclose(
+        aggregated.sum(["source_country", "technology"]),
+        1,
+    )
+
+
+def test_custom_profile_is_shared_between_countries_and_scale_invariant():
+    consumption_mix, consumption_volume = _profile_inputs()
+    profile = pd.Series(
+        [1.0, 3.0],
+        index=consumption_mix["time"].to_index(),
+        name="factory load",
+    )
+
+    aggregated = aggregate_consumption_mix(
+        consumption_mix,
+        consumption_profile=profile,
+        consumption_volume=consumption_volume,
+    )
+    scaled = aggregate_consumption_mix(
+        consumption_mix,
+        consumption_profile=profile * 1000,
+        consumption_volume=consumption_volume,
+    )
+
+    xr.testing.assert_allclose(aggregated, scaled)
+    np.testing.assert_allclose(
+        aggregated.sel(consumer_country="FR").to_numpy().ravel(),
+        [0.25, 0.75],
+    )
+    np.testing.assert_allclose(
+        aggregated.sel(consumer_country="DE").to_numpy().ravel(),
+        [0.5, 0.5],
+    )
+    assert aggregated.attrs["consumption_profile"] == "custom"
+    assert aggregated.attrs["consumption_profile_name"] == "factory load"
+
+
+def test_custom_profile_requires_every_selected_timestamp():
+    consumption_mix, _ = _profile_inputs()
+    profile = pd.Series(
+        [1.0],
+        index=consumption_mix["time"].to_index()[:1],
+    )
+
+    with pytest.raises(ValueError, match="missing selected timestamps"):
+        aggregate_consumption_mix(
+            consumption_mix,
+            consumption_profile=profile,
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "message"),
+    [
+        ("unsupported", "must be 'flat'"),
+        ([1.0, 2.0], "must be 'flat'"),
+        (pd.Series([], index=pd.DatetimeIndex([]), dtype=float), "cannot be empty"),
+        (pd.Series([1.0], index=["2040-01-01"]), "DatetimeIndex"),
+        (
+            pd.Series(
+                [1.0, 2.0],
+                index=pd.to_datetime(["2040-01-01", "2040-01-01"]),
+            ),
+            "duplicate timestamps",
+        ),
+        (
+            pd.Series([-1.0], index=pd.to_datetime(["2040-01-01"])),
+            "negative",
+        ),
+        (
+            pd.Series([np.nan], index=pd.to_datetime(["2040-01-01"])),
+            "missing or non-finite",
+        ),
+    ],
+)
+def test_consumption_profile_validation_rejects_invalid_values(profile, message):
+    error = ValueError if isinstance(profile, (str, pd.Series)) else TypeError
+    with pytest.raises(error, match=message):
+        validate_consumption_profile(profile)
+
+
+def test_national_demand_profile_rejects_zero_country_total():
+    consumption_mix, consumption_volume = _profile_inputs()
+    consumption_volume.loc[{"consumer_country": "DE"}] = 0
+
+    with pytest.raises(ValueError, match="more than zero: DE"):
+        aggregate_consumption_mix(
+            consumption_mix,
+            consumption_profile="national_demand",
+            consumption_volume=consumption_volume,
+        )
 
 
 def test_activity_mapping_allocates_known_shares_and_preserves_fallback():

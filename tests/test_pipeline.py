@@ -5,7 +5,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from shrecc.pipeline import NewDatabase
+from shrecc.pipeline import (
+    NewDatabase,
+    _adapt_profile_to_tyndp_times,
+)
 
 
 def _canonical_results(year):
@@ -120,7 +123,9 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
         return_value=(
             activity_mix,
             xr.zeros_like(
-                results["consumption_mix"].sel(consumer_country=["FR"])
+                results["consumption_mix"]
+                .sel(consumer_country=["FR"])
+                .mean("time")
             ),
         )
     )
@@ -155,6 +160,7 @@ def test_historical_create_uses_canonical_cache_and_retains_volume(monkeypatch):
         map_activities.call_args.args[0]["consumer_country"].to_numpy().tolist()
         == ["FR"]
     )
+    assert "time" not in map_activities.call_args.args[0].dims
     assert "consumption_mix_volume" in database.results()
     assert database.mapping_report().empty
     xr.testing.assert_allclose(
@@ -187,6 +193,81 @@ def test_historical_create_runs_real_canonical_pipeline(monkeypatch, tmp_path):
     np.testing.assert_allclose(database.table().sum(), [1, 1])
     assert database.results().attrs["solver"] == "country_trade_block"
     assert (tmp_path / "2025" / "consumption_results_v1" / "manifest.json").is_file()
+
+
+def test_historical_create_applies_national_demand_before_activity_mapping(
+    monkeypatch,
+):
+    year = 2025
+    times = pd.date_range(f"{year}-06-01 10:00", periods=2, freq="h")
+    consumption_mix = xr.DataArray(
+        [[[[1.0], [0.0]]], [[[0.0], [1.0]]]],
+        dims=("time", "consumer_country", "source_country", "technology"),
+        coords={
+            "time": times,
+            "consumer_country": ["FR"],
+            "source_country": ["FR", "DE"],
+            "technology": ["Wind"],
+        },
+        name="consumption_mix",
+    )
+    consumption_volume = xr.DataArray(
+        [[1.0], [3.0]],
+        dims=("time", "consumer_country"),
+        coords={"time": times, "consumer_country": ["FR"]},
+        name="consumption_volume",
+    )
+    results = xr.Dataset(
+        {
+            "consumption_mix": consumption_mix,
+            "consumption_volume": consumption_volume,
+        },
+        attrs={"volume_unit": "MWh"},
+    )
+    mapped_activity_mix = _activity_mix(year).mean("time")
+    map_activities = MagicMock(
+        return_value=(
+            mapped_activity_mix,
+            xr.zeros_like(consumption_mix.mean("time")),
+        )
+    )
+
+    monkeypatch.setattr("shrecc.pipeline.get_energy_charts_data", MagicMock())
+    monkeypatch.setattr(
+        "shrecc.pipeline.process_energy_charts_data",
+        MagicMock(return_value="cache"),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.load_consumption_result_cache",
+        MagicMock(return_value=results),
+    )
+    monkeypatch.setattr("shrecc.pipeline.load_ecoinvent_mapping", MagicMock())
+    monkeypatch.setattr(
+        "shrecc.pipeline.map_consumption_mix_to_ecoinvent_activities",
+        map_activities,
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.activity_mix_to_database_table",
+        MagicMock(return_value=_database_table()),
+    )
+
+    NewDatabase(
+        years=year,
+        countries=["FR"],
+        project_name="project",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc_FR_2025",
+        time_range=[times[0], times[-1]],
+        consumption_profile="national_demand",
+        data_dir="data",
+    ).create()
+
+    weighted_mix = map_activities.call_args.args[0]
+    assert "time" not in weighted_mix.dims
+    np.testing.assert_allclose(
+        weighted_mix.to_numpy().ravel(),
+        [0.25, 0.75],
+    )
 
 
 def test_historical_create_repairs_cache_missing_required_country(
@@ -299,6 +380,7 @@ def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch)
 
     assert database.sources == {year: "tyndp"}
     assert database.exchange_geography_maps[year].equals(exchange_map)
+    assert "time" not in mapper.map_technologies.call_args.args[0].dims
     write_database.assert_not_called()
 
     database.write()
@@ -311,7 +393,58 @@ def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch)
         network=True,
         strict=False,
         year=year,
+        consumption_profile="flat",
     )
+
+
+def test_create_can_release_hourly_results_after_aggregation(monkeypatch):
+    year = 2040
+    times = pd.date_range(f"{year}-06-01 10:00", periods=2, freq="h")
+    results = _canonical_results(year)
+    solve = MagicMock(return_value=results)
+    mapper = MagicMock()
+    mapper.map_technologies.return_value = _premise_activity_mix(year)
+    mapper.build_exchange_geography_map.return_value = pd.DataFrame(
+        {"FR": ["FR"]},
+        index=pd.Index(["wind activity"], name="premise_activity"),
+    )
+
+    monkeypatch.setattr(
+        "shrecc.pipeline.build_z_gross_from_tyndp_scenario",
+        MagicMock(return_value=pd.DataFrame({"value": [1.0, 2.0]}, index=times)),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.consumption_results_from_z_gross",
+        solve,
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.PremiseConsumptionMixMapper",
+        MagicMock(return_value=mapper),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.premise_activity_mix_to_database_table",
+        MagicMock(return_value=_database_table()),
+    )
+
+    database = NewDatabase(
+        scenario="DE",
+        years=year,
+        climate_year=2009,
+        bg_db_name="premise-remind-eu-2040",
+        my_db_name="shrecc_DE_2040",
+        countries=["FR"],
+        time_range=[times[0], times[-1]],
+        project_name="project",
+        include_cutoff=False,
+        include_consumption_mix_volume=False,
+        retain_hourly_results=False,
+    ).create()
+
+    assert database.consumption_results == {}
+    assert database.table().equals(_database_table())
+    assert solve.call_args.kwargs["include_consumption_mix_volume"] is False
+    with pytest.raises(RuntimeError, match="were not retained"):
+        database.results()
 
 
 def test_prospective_create_reports_countries_absent_from_tyndp_before_solving(
@@ -374,6 +507,177 @@ def test_multi_year_names_and_time_ranges_are_expanded():
         2040: "shrecc_DE_2040",
     }
     assert database._selection_for_year(2035)[0][0].year == 2035
+
+
+def test_february_time_range_clips_leap_day_for_non_leap_model_years():
+    database = NewDatabase(
+        years=[2035, 2040, 2050],
+        source="energy_charts",
+        bg_db_name="ecoinvent-{year}",
+        my_db_name="shrecc_february",
+        countries=["FR"],
+        time_range=["2040-02-01 00:00", "2040-02-29 23:00"],
+        project_name="project",
+    )
+
+    with pytest.warns(UserWarning, match="Clipped 1 February 29"):
+        range_2035, _ = database._selection_for_year(2035)
+    range_2040, _ = database._selection_for_year(2040)
+    with pytest.warns(UserWarning, match="Clipped 1 February 29"):
+        range_2050, _ = database._selection_for_year(2050)
+
+    assert range_2035 == list(
+        pd.to_datetime(["2035-02-01 00:00", "2035-02-28 23:00"])
+    )
+    assert range_2040 == list(
+        pd.to_datetime(["2040-02-01 00:00", "2040-02-29 23:00"])
+    )
+    assert range_2050 == list(
+        pd.to_datetime(["2050-02-01 00:00", "2050-02-28 23:00"])
+    )
+
+
+def test_explicit_february_29_time_is_dropped_for_non_leap_model_year():
+    database = NewDatabase(
+        years=[2035, 2040],
+        source="energy_charts",
+        bg_db_name="ecoinvent-{year}",
+        my_db_name="shrecc_explicit_times",
+        countries=["FR"],
+        times=["2040-02-28 12:00", "2040-02-29 12:00"],
+        project_name="project",
+    )
+
+    with pytest.warns(UserWarning, match="Dropped 1 explicit February 29"):
+        _, times_2035 = database._selection_for_year(2035)
+
+    assert times_2035.equals(pd.to_datetime(["2035-02-28 12:00"]))
+
+
+def test_single_year_custom_profile_is_a_partial_reusable_template():
+    profile = pd.Series(
+        [1.0, 2.0],
+        index=pd.to_datetime(
+            ["2024-06-01 10:00", "2024-06-02 14:00"]
+        ),
+        name="office",
+    )
+
+    database = NewDatabase(
+        years=[2025, 2026],
+        source="energy_charts",
+        bg_db_name="ecoinvent-{year}",
+        my_db_name="shrecc_profile",
+        countries=["FR"],
+        project_name="project",
+        consumption_profile=profile,
+    )
+
+    assert database._selection_for_year(2025)[1].equals(
+        pd.to_datetime(["2025-06-01 10:00", "2025-06-02 14:00"])
+    )
+    assert database._selection_for_year(2026)[1].equals(
+        pd.to_datetime(["2026-06-01 10:00", "2026-06-02 14:00"])
+    )
+
+
+def test_custom_profile_warns_and_ignores_explicit_time_selection():
+    profile = pd.Series(
+        [1.0],
+        index=pd.to_datetime(["2025-06-01 10:00"]),
+    )
+
+    with pytest.warns(UserWarning, match="Ignoring: times, time_range, hour_range"):
+        database = NewDatabase(
+            years=2025,
+            source="energy_charts",
+            bg_db_name="ecoinvent",
+            my_db_name="shrecc_profile",
+            countries=["FR"],
+            project_name="project",
+            consumption_profile=profile,
+            times=["2025-07-01 10:00"],
+            time_range=["2025-08-01", "2025-08-02"],
+            hour_range=[10, 14],
+        )
+
+    assert database.times is None
+    assert database.time_range is None
+    assert database.hour_range is None
+    assert database._selection_for_year(2025)[1].equals(profile.index)
+
+
+def test_february_29_is_dropped_with_warning_for_non_leap_model_year():
+    profile = pd.Series(
+        [1.0, 2.0],
+        index=pd.to_datetime(["2024-02-28 12:00", "2024-02-29 12:00"]),
+    )
+
+    with pytest.warns(UserWarning, match="Dropped 1 February 29"):
+        database = NewDatabase(
+            years=[2024, 2025],
+            source="energy_charts",
+            bg_db_name="ecoinvent-{year}",
+            my_db_name="shrecc_profile",
+            countries=["FR"],
+            project_name="project",
+            consumption_profile=profile,
+        )
+
+    assert database._selection_for_year(2024)[1].equals(profile.index)
+    assert database._selection_for_year(2025)[1].equals(
+        pd.to_datetime(["2025-02-28 12:00"])
+    )
+
+
+def test_tyndp_december_31_profile_times_are_dropped_with_warning():
+    profile = pd.Series(
+        [1.0, 2.0],
+        index=pd.to_datetime(["2040-12-30 12:00", "2040-12-31 12:00"]),
+    )
+    available = pd.to_datetime(["2040-12-30 12:00"])
+
+    with pytest.warns(UserWarning, match="do not include December 31"):
+        adapted = _adapt_profile_to_tyndp_times(
+            profile,
+            available,
+            year=2040,
+        )
+
+    assert adapted.index.equals(available)
+    np.testing.assert_allclose(adapted.to_numpy(), [1.0])
+
+
+def test_tyndp_other_missing_positive_profile_times_raise():
+    profile = pd.Series(
+        [1.0],
+        index=pd.to_datetime(["2040-06-01 10:30"]),
+    )
+
+    with pytest.raises(ValueError, match="positive-weight custom"):
+        _adapt_profile_to_tyndp_times(
+            profile,
+            pd.to_datetime(["2040-06-01 10:00"]),
+            year=2040,
+        )
+
+
+def test_zero_weight_custom_profile_times_do_not_select_source_data():
+    profile = pd.Series(
+        [0.0, 2.0],
+        index=pd.to_datetime(["2025-06-01 10:00", "2025-06-01 11:00"]),
+    )
+    database = NewDatabase(
+        years=2025,
+        source="energy_charts",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc_profile",
+        countries=["FR"],
+        project_name="project",
+        consumption_profile=profile,
+    )
+
+    assert database._selection_for_year(2025)[1].equals(profile.index[1:])
 
 
 def test_hour_range_is_inclusive_and_hourly_by_definition():
