@@ -5,7 +5,9 @@ from pathlib import Path
 import shutil
 import warnings
 
+import bw2data as bd
 import pandas as pd
+import xarray as xr
 
 from shrecc.database import apply_cutoff, create_database
 from shrecc.energy_charts import (
@@ -22,6 +24,14 @@ from shrecc.mapping import (
     mapping_gap_to_report,
     validate_consumption_profile,
     validate_inventory_resolution,
+)
+from shrecc.lcia import (
+    LCIAResults,
+    build_lcia_dataset,
+    build_resolved_inventory_basis,
+    calculate_lcia,
+    consumption_profile_weights,
+    resolve_lcia_methods,
 )
 from shrecc.premise_mapping import (
     PremiseConsumptionMixMapper,
@@ -55,10 +65,12 @@ class NewDatabase:
     maps the resulting technology shares to ecoinvent or premise activities,
     and prepares one inventory for each requested consumer country.
 
-    The workflow is deliberately split in two. :meth:`create` downloads or
-    reads source data, solves the electricity system, and prepares inspectable
-    in-memory tables. :meth:`write` then writes those tables to Brightway.
-    Calling :meth:`create` alone does not modify a Brightway project.
+    The workflow is deliberately staged. :meth:`create` downloads or reads
+    source data, solves the electricity system, and prepares inspectable
+    in-memory tables. :meth:`write` writes annual or monthly tables to
+    Brightway. :meth:`lcia` calculates hourly impacts without writing hourly
+    activities. Calling :meth:`create` alone does not modify a Brightway
+    project.
 
     With ``source="auto"``, supported prospective years use ENTSO-E TYNDP
     scenario data and other years use historical Energy Charts data. Multi-year
@@ -110,16 +122,16 @@ class NewDatabase:
             within one calendar year is reused as a template for every model
             year.
         inventory_resolution: Temporal resolution of written foreground
-            activities: ``"annual"`` (default), ``"monthly"``, or
-            ``"hourly"``. ``"yearly"`` is accepted as an alias for
-            ``"annual"``. Consumption profiles do not apply to hourly
-            inventories.
+            activities: ``"annual"`` (default) or ``"monthly"``.
+            ``"yearly"`` is accepted as an alias for ``"annual"``. Hourly
+            results remain available for calculation through :meth:`lcia`.
         include_consumption_mix_volume: Retain the resolved four-dimensional
             consumption volumes as well as normalized shares. Disable this to
             reduce memory and cache size when only inventory shares are needed.
         retain_hourly_results: Keep canonical hourly result datasets on this
             object after aggregation. Disable this for memory-efficient
             database creation when only mapped tables and reports are needed.
+            Hourly LCIA requires this option to remain enabled.
         data_dir: Optional local cache directory. The platform-specific SHRECC
             user-data directory is used by default.
         technology_mapping: Optional replacement TYNDP technology concordance.
@@ -139,6 +151,8 @@ class NewDatabase:
     diagnostics are retained in ``mapping_gap_reports``;
     :meth:`mapping_report` returns a defensive copy. Successfully written
     output names are recorded in ``written_database_names``.
+    After :meth:`lcia`, labelled temporal assessment results are retained in
+    ``lcia_results``.
 
     Examples:
         >>> electricity = NewDatabase(
@@ -210,17 +224,7 @@ class NewDatabase:
         self.consumption_profile = validate_consumption_profile(
             consumption_profile
         )
-        profile_defines_time = (
-            self.inventory_resolution != "hourly"
-            and isinstance(self.consumption_profile, pd.Series)
-        )
-        if self.inventory_resolution == "hourly":
-            warnings.warn(
-                "consumption_profile is ignored when "
-                "inventory_resolution='hourly'. Select hourly inventories "
-                "with times, time_range, and hour_range.",
-                stacklevel=2,
-            )
+        profile_defines_time = isinstance(self.consumption_profile, pd.Series)
         _validate_time_selection(
             time_range,
             hour_range,
@@ -235,15 +239,10 @@ class NewDatabase:
             self.time_range = time_range
             self.hour_range = hour_range
             self.times = times
-        if self.inventory_resolution == "hourly":
-            self._consumption_profiles_by_year = {
-                year: None for year in self.years
-            }
-        else:
-            self._consumption_profiles_by_year = _resolve_consumption_profiles(
-                self.consumption_profile,
-                self.years,
-            )
+        self._consumption_profiles_by_year = _resolve_consumption_profiles(
+            self.consumption_profile,
+            self.years,
+        )
 
         self.cutoff = float(cutoff)
         if self.cutoff < 0:
@@ -314,14 +313,15 @@ class NewDatabase:
         self.mapping_gap_reports = {}
         self.database_tables = {}
         self.written_database_names = {}
+        self.lcia_results = None
 
     def create(self):
         """Prepare mapped inventory tables without changing Brightway.
 
         Source data are acquired or loaded from cache, the interconnected
         electricity system is solved, and the requested times are resolved to
-        annual, monthly, or hourly inventories. Technologies are then mapped
-        to background activities and the cutoff is applied. Existing results
+        annual or monthly inventories. Technologies are then mapped to
+        background activities and the cutoff is applied. Existing results
         on this object are replaced, so calling this method again rebuilds
         every configured year and can fill newly cached source data.
 
@@ -335,6 +335,7 @@ class NewDatabase:
         self.mapping_gap_reports.clear()
         self.database_tables.clear()
         self.written_database_names.clear()
+        self.lcia_results = None
 
         for year in self.years:
             if self.verbose:
@@ -344,6 +345,89 @@ class NewDatabase:
             else:
                 self._create_energy_charts_year(year)
         return self
+
+    def lcia(self, methods=None, *, engine="linear", batch_size=1000):
+        """Calculate hourly LCIA without writing hourly Brightway activities.
+
+        The default ``linear`` engine scores each unique background input once
+        and multiplies those scores by the hourly mapped coefficients. The
+        ``multilca`` engine instead submits composite hourly functional units
+        to Brightway in bounded batches and is primarily intended for
+        validation.
+
+        Args:
+            methods: Brightway method tuple or iterable of method tuples.
+                When omitted, all installed ``EF v3.1`` methods are used.
+            engine: ``"linear"`` (default) or ``"multilca"``.
+            batch_size: Number of composite functional units per MultiLCA
+                batch. Ignored by the linear engine.
+
+        Returns:
+            :class:`shrecc.lcia.LCIAResults` with hourly intensities and
+            profile-weighted annual and monthly accessors.
+
+        Raises:
+            RuntimeError: If hourly canonical results were not retained.
+        """
+        if not self.retain_hourly_results:
+            raise RuntimeError(
+                "lcia() requires retain_hourly_results=True"
+            )
+        if set(self.consumption_results) != set(self.years):
+            self.create()
+
+        bd.projects.set_current(self.project_name)
+        resolved_methods = resolve_lcia_methods(methods)
+        results_by_year = {}
+        for year in self.years:
+            if self.verbose:
+                print(
+                    f"Calculating hourly LCIA for {year} with the {engine} engine"
+                )
+            country_intensities = []
+            source_score_cache = {}
+            for country in self.countries:
+                hourly_table = self._hourly_database_table(
+                    year,
+                    countries=[country],
+                )
+                basis = build_resolved_inventory_basis(
+                    hourly_table,
+                    year=year,
+                    background_database=self.background_databases[year],
+                    include_network=self.network,
+                    strict=self.strict,
+                )
+                country_intensities.append(
+                    calculate_lcia(
+                        basis,
+                        resolved_methods,
+                        engine=engine,
+                        batch_size=batch_size,
+                        source_score_cache=source_score_cache,
+                    )
+                )
+            intensity = xr.concat(
+                country_intensities,
+                dim="consumer_country",
+            ).sel(consumer_country=list(self.countries))
+            weights = consumption_profile_weights(
+                self.consumption_results[year],
+                self._consumption_profiles_by_year[year],
+            )
+            results_by_year[year] = build_lcia_dataset(
+                intensity,
+                weights,
+                year=year,
+                engine=engine,
+            )
+
+        self.lcia_results = LCIAResults(
+            results_by_year,
+            resolved_methods,
+            engine,
+        )
+        return self.lcia_results
 
     def write(self):
         """Write the prepared inventories to the configured Brightway project.
@@ -665,6 +749,50 @@ class NewDatabase:
             stacklevel=4,
         )
 
+    def _hourly_database_table(self, year, *, countries=None):
+        """Map retained hourly results to background activity table rows."""
+        countries = list(countries or self.countries)
+        consumption_mix = self.consumption_results[year]["consumption_mix"].sel(
+            consumer_country=countries
+        )
+        if self.sources[year] == "energy_charts":
+            activity_mapping = load_ecoinvent_mapping(
+                Path(self.ecoinvent_mapping)
+            )
+            activity_mix = map_consumption_mix_to_ecoinvent_activities(
+                consumption_mix,
+                activity_mapping,
+                check=self.check,
+            )
+            return activity_mix_to_database_table(
+                activity_mix,
+                countries=countries,
+                inventory_resolution="annual",
+                preserve_time=True,
+            )
+
+        mapper = PremiseConsumptionMixMapper(
+            technology_mapping=self.technology_mapping,
+            ecoinvent_mapping=self.ecoinvent_mapping,
+            iam_model=self.iam,
+            topology_files=self.topology_files,
+            on_missing_model="warn",
+        )
+        activity_mix = mapper.map_technologies(
+            consumption_mix,
+            check=self.check,
+        )
+        exchange_geography_map = mapper.build_exchange_geography_map(
+            activity_mix
+        )
+        return premise_activity_mix_to_database_table(
+            activity_mix,
+            exchange_geography_map,
+            countries=countries,
+            inventory_resolution="annual",
+            preserve_time=True,
+        )
+
     def _store_year(self, year, results, activity_mix, table):
         if self.retain_hourly_results:
             self.consumption_results[year] = results
@@ -681,8 +809,6 @@ class NewDatabase:
         return "tyndp" if year in PROSPECTIVE_YEARS else "energy_charts"
 
     def _consumption_profile_label(self):
-        if self.inventory_resolution == "hourly":
-            return None
         if isinstance(self.consumption_profile, str):
             return self.consumption_profile
         if self.consumption_profile.name is None:

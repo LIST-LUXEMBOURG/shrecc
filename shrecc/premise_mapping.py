@@ -411,6 +411,7 @@ def premise_activity_mix_to_database_table(
     refined_range=None,
     freq=None,
     inventory_resolution="annual",
+    preserve_time=False,
     product="electricity, high voltage",
     unit="kWh",
 ):
@@ -428,8 +429,10 @@ def premise_activity_mix_to_database_table(
             ``general_range``, following :func:`shrecc.database.filt_cutoff`.
         freq: Pandas frequency used to generate timestamps within
             ``general_range`` when ``refined_range`` is supplied.
-        inventory_resolution: Whether columns represent annual, monthly, or
-            hourly inventories.
+        inventory_resolution: Whether columns represent annual or monthly
+            inventories.
+        preserve_time: Keep hourly timestamps instead of applying annual
+            aggregation. Intended for in-memory assessment inputs.
         product: Product label used in the output MultiIndex.
         unit: Unit label used in the output MultiIndex.
 
@@ -458,7 +461,7 @@ def premise_activity_mix_to_database_table(
         freq=freq,
     )
 
-    if "time" in mix.dims and resolution == "annual":
+    if "time" in mix.dims and resolution == "annual" and not preserve_time:
         mix = mix.mean("time")
 
     source_countries = mix["source_country"].to_index()

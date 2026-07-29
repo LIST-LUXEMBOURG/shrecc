@@ -7,17 +7,27 @@ SHRECC CHANGELOG
 
 - Add `inventory_resolution` to `NewDatabase`. Annual inventories remain the
   default; monthly inventories are weighted and normalized within each
-  calendar month, and hourly inventories preserve every selected solved mix.
-- Record annual, monthly, and hourly period labels in foreground activity
-  names and document the resolution, period, and applicable consumption
-  profile in the Brightway activity `comment`.
+  calendar month.
+- Record annual and monthly period labels in foreground activity names and
+  document the resolution, period, and consumption profile in the Brightway
+  activity `comment`.
 - Accept `"yearly"` as an alias for `"annual"`.
+- Add `NewDatabase.lcia()` for hourly temporal assessment without writing
+  hourly foreground activities. The default linear engine scores each unique
+  background input once and combines scores with hourly coefficients; a
+  batched composite-MultiLCA engine is available for validation.
+- Default temporal LCIA to all installed methods in the exact `EF v3.1`
+  Brightway method family.
+- Add `LCIAResults` with hourly, annual, and monthly profile-weighted accessors.
 
 ### Changed
 
-- Ignore `consumption_profile` with a warning for hourly inventories, where
-  each solved timestamp is already the final inventory. Custom profiles retain
-  their timestamp-selection priority for monthly and annual inventories only.
+- Limit written foreground inventory resolution to annual and monthly.
+  Requesting hourly inventory writing now directs users to `NewDatabase.lcia()`.
+- Map temporal LCIA one consumer country at a time and cache unique background
+  input scores across countries to bound memory use.
+- Reuse country-specific network-selection rules in database writing and
+  temporal LCIA.
 
 ## 0.1.0.dev3
 

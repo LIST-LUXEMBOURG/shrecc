@@ -8,6 +8,7 @@
 __all__ = (
     "__version__",
     "NewDatabase",
+    "LCIAResults",
     "create_database",
     "filt_cutoff",
     "get_data",
@@ -15,6 +16,7 @@ __all__ = (
 )
 from .database import create_database, filt_cutoff
 from .energy_charts import data_processing, get_data
+from .lcia import LCIAResults
 from .pipeline import NewDatabase
 
 __version__ = "0.1.0.dev3"

@@ -182,20 +182,12 @@ def test_monthly_resolution_applies_profile_within_each_month():
     assert aggregated.attrs["inventory_resolution"] == "monthly"
 
 
-def test_hourly_resolution_preserves_selected_mix_and_ignores_profile():
-    consumption_mix, consumption_volume = _profile_inputs()
-
-    with pytest.warns(UserWarning, match="consumption_profile is ignored"):
-        resolved = aggregate_consumption_mix(
-            consumption_mix,
-            consumption_profile="national_demand",
-            consumption_volume=consumption_volume,
-            inventory_resolution="hourly",
-        )
-
-    xr.testing.assert_allclose(resolved, consumption_mix)
-    assert resolved.attrs["inventory_resolution"] == "hourly"
-    assert resolved.attrs["consumption_profile"] == "not_applicable"
+def test_hourly_inventory_resolution_points_to_lcia():
+    with pytest.raises(
+        ValueError,
+        match=r"Use NewDatabase\.lcia\(\)",
+    ):
+        validate_inventory_resolution("hourly")
 
 
 def test_yearly_inventory_resolution_is_an_annual_alias():
@@ -336,7 +328,7 @@ def test_activity_mix_table_reuses_range_selection_and_averages_time():
     )
 
 
-def test_activity_mix_table_preserves_hourly_inventory_columns():
+def test_activity_mix_table_can_preserve_time_for_assessment():
     activity_mix = map_consumption_mix_to_ecoinvent_activities(
         _consumption_mix(),
         _activity_mapping(),
@@ -345,7 +337,8 @@ def test_activity_mix_table_preserves_hourly_inventory_columns():
     table = activity_mix_to_database_table(
         activity_mix,
         countries=["FR"],
-        inventory_resolution="hourly",
+        inventory_resolution="annual",
+        preserve_time=True,
     )
 
     assert table.columns.names == ["time", "country"]

@@ -503,6 +503,99 @@ def test_create_can_release_hourly_results_after_aggregation(monkeypatch):
         database.results()
 
 
+def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
+    year = 2025
+    results = _canonical_results(year)
+    table = pd.DataFrame(
+        [[1.0, 1.0]],
+        index=pd.MultiIndex.from_tuples(
+            [("FR", "wind", "electricity", "kWh")],
+            names=["geography", "activityName", "product", "unit"],
+        ),
+        columns=pd.MultiIndex.from_product(
+            [results["time"].to_index(), ["FR"]],
+            names=["time", "country"],
+        ),
+    )
+    method = ("ecoinvent", "EF v3.1", "climate change", "GWP100")
+    intensity = xr.DataArray(
+        np.array([[[10.0]], [[20.0]]]),
+        dims=("time", "consumer_country", "impact_category"),
+        coords={
+            "time": results["time"],
+            "consumer_country": ["FR"],
+            "impact_category": ["climate"],
+        },
+    )
+    basis = object()
+    database = NewDatabase(
+        years=year,
+        source="energy_charts",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc",
+        countries=["FR"],
+        project_name="project",
+        times=results["time"].to_index(),
+    )
+    database.consumption_results[year] = results
+    monkeypatch.setattr(
+        database,
+        "_hourly_database_table",
+        MagicMock(return_value=table),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.resolve_lcia_methods",
+        MagicMock(return_value=(method,)),
+    )
+    build_basis = MagicMock(return_value=basis)
+    monkeypatch.setattr(
+        "shrecc.pipeline.build_resolved_inventory_basis",
+        build_basis,
+    )
+    calculate = MagicMock(return_value=intensity)
+    monkeypatch.setattr("shrecc.pipeline.calculate_lcia", calculate)
+    monkeypatch.setattr("shrecc.pipeline.bd.projects.set_current", MagicMock())
+
+    lcia_results = database.lcia()
+
+    assert database.lcia_results is lcia_results
+    assert lcia_results.annual().sel(
+        year=year,
+        consumer_country="FR",
+        impact_category="climate",
+    ).item() == pytest.approx(15.0)
+    build_basis.assert_called_once_with(
+        table,
+        year=year,
+        background_database="ecoinvent",
+        include_network=True,
+        strict=False,
+    )
+    calculate.assert_called_once_with(
+        basis,
+        (method,),
+        engine="linear",
+        batch_size=1000,
+        source_score_cache={},
+    )
+
+
+def test_lcia_requires_retained_hourly_results():
+    database = NewDatabase(
+        years=2025,
+        source="energy_charts",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc",
+        countries=["FR"],
+        project_name="project",
+        retain_hourly_results=False,
+        times=["2025-06-01 10:00"],
+    )
+
+    with pytest.raises(RuntimeError, match="retain_hourly_results=True"):
+        database.lcia()
+
+
 def test_prospective_create_reports_countries_absent_from_tyndp_before_solving(
     monkeypatch,
 ):
@@ -663,15 +756,9 @@ def test_custom_profile_warns_and_ignores_explicit_time_selection():
     assert database._selection_for_year(2025)[1].equals(profile.index)
 
 
-def test_hourly_resolution_ignores_custom_profile_but_uses_explicit_times():
-    profile = pd.Series(
-        [1.0],
-        index=pd.to_datetime(["2024-01-01 00:00"]),
-    )
-    requested_times = pd.to_datetime(["2025-06-01 10:00", "2025-06-01 11:00"])
-
-    with pytest.warns(UserWarning, match="consumption_profile is ignored"):
-        database = NewDatabase(
+def test_hourly_inventory_resolution_points_to_lcia():
+    with pytest.raises(ValueError, match=r"Use NewDatabase\.lcia\(\)"):
+        NewDatabase(
             years=2025,
             source="energy_charts",
             bg_db_name="ecoinvent",
@@ -679,14 +766,7 @@ def test_hourly_resolution_ignores_custom_profile_but_uses_explicit_times():
             countries=["FR"],
             project_name="project",
             inventory_resolution="hourly",
-            consumption_profile=profile,
-            times=requested_times,
         )
-
-    assert database.inventory_resolution == "hourly"
-    assert database._consumption_profiles_by_year == {2025: None}
-    assert database._selection_for_year(2025)[1].equals(requested_times)
-    assert database._consumption_profile_label() is None
 
 
 def test_yearly_inventory_resolution_is_normalized_to_annual():

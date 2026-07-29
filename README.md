@@ -13,8 +13,8 @@ scenario data for prospective years, while exposing the same workflow for both.
 - Hourly production, trade, consumption-volume, and consumption-mix results.
 - One reduced country-network solver shared by Energy Charts and TYNDP data.
 - Historical ecoinvent allocation and prospective premise/IAM mapping.
-- Annual, monthly, or hourly Brightway inventories from range-based or
-  explicit timestamp selections.
+- Annual or monthly Brightway inventories from range-based or explicit
+  timestamp selections, plus hourly LCIA without hourly foreground activities.
 - Inspectable intermediate results before any Brightway database is changed.
 - Resumable source acquisition and compressed, time-chunked result caches.
 - Brightway 2 and 2.5 database writing through `NewDatabase`.
@@ -96,13 +96,26 @@ Foreground activity names and metadata also record their modeled period.
 
 `inventory_resolution` controls how many foreground activities are written:
 `"annual"` creates one activity per country and year, `"monthly"` creates one
-per country and selected calendar month, and `"hourly"` creates one per country
-and selected timestamp. Annual and monthly inventories apply
-`consumption_profile` within each period. Hourly inventories preserve each
-solved mix directly, so consumption-profile weighting does not apply.
+per country and selected calendar month. Both resolutions apply
+`consumption_profile` within each period. Hourly inventories are not written
+as Brightway activities.
 
-Intermediate canonical results and mapped tables remain available on the class
-instance through `results(year)` and `table(year)`. Use
+Hourly LCIA is calculated directly from the retained hourly mixes. By default,
+SHRECC selects every installed EF v3.1 impact category, scores each unique
+background input once, and combines those scores with the hourly coefficients:
+
+```python
+lcia_results = electricity.lcia()
+hourly_intensity = lcia_results.hourly(2040)["intensity"]
+annual_intensity = lcia_results.annual()
+```
+
+Use `electricity.lcia(methods=..., engine="multilca")` to validate the
+optimized calculation with composite Brightway MultiLCA functional units.
+Neither engine writes hourly foreground activities.
+
+Intermediate canonical results and annual/monthly mapped tables remain
+available on the class instance through `results(year)` and `table(year)`. Use
 `mapping_report(year)` to inspect any historical technologies assigned to a
 country-specific high-voltage fallback activity.
 

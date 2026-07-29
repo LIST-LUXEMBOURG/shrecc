@@ -1949,35 +1949,16 @@ def test_create_activity_dict_adds_year_and_profile_to_metadata(
 
 
 @patch("shrecc.database.get_network_activities", return_value=[])
-@pytest.mark.parametrize(
-    ("resolution", "expected_names", "profile_comment"),
-    [
-        (
-            "monthly",
-            [
-                "Electricity mix in FR, 2023-06",
-                "Electricity mix in DE, 2023-06",
-            ],
-            "Consumption profile: national_demand.",
-        ),
-        (
-            "hourly",
-            [
-                "Electricity mix in FR, 2023-06-01 08:00",
-                "Electricity mix in DE, 2023-06-01 09:00",
-            ],
-            "Consumption profile: not applicable at hourly resolution.",
-        ),
-    ],
-)
 def test_create_activity_dict_names_and_documents_resolved_periods(
     mock_get_network_activities,
     sample_dataframe_filt,
     known_inputs_fixture,
-    resolution,
-    expected_names,
-    profile_comment,
 ):
+    resolution = "monthly"
+    expected_names = [
+        "Electricity mix in FR, 2023-06",
+        "Electricity mix in DE, 2023-06",
+    ]
     activities = create_activity_dict(
         sample_dataframe_filt,
         known_inputs_fixture,
@@ -1992,12 +1973,8 @@ def test_create_activity_dict_names_and_documents_resolved_periods(
     for activity in activities.values():
         assert activity["inventory_resolution"] == resolution
         assert f"Inventory resolution: {resolution}." in activity["comment"]
-        assert profile_comment in activity["comment"]
-    if resolution == "hourly":
-        assert all(
-            "consumption_profile" not in activity
-            for activity in activities.values()
-        )
+        assert "Consumption profile: national_demand." in activity["comment"]
+        assert activity["consumption_profile"] == "national_demand"
 
 
 # ────────────────────────────────────────────────────────────

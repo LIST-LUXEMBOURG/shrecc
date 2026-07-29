@@ -360,6 +360,71 @@ def get_network_activities(eidb_name):
     return network_act
 
 
+def get_country_network_activities(eidb_name, country):
+    """Return the fixed network exchanges included for one consumer country."""
+    specific_network = {
+        "land": (
+            "market for transmission network, electricity, high voltage "
+            "direct current land cable"
+        ),
+        "subsea": (
+            "market for transmission network, electricity, high voltage "
+            "direct current subsea cable"
+        ),
+        "construction": (
+            "transmission network construction, electricity, high voltage"
+        ),
+    }
+    land_cable_countries = {
+        "AT",
+        "BE",
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "IT",
+        "LT",
+        "LV",
+        "ME",
+        "MT",
+        "NO",
+        "SE",
+        "TR",
+        "UK",
+    }
+    subsea_cable_countries = {
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "IT",
+        "LT",
+        "ME",
+        "MT",
+        "NO",
+        "PL",
+        "UK",
+    }
+    selected = []
+    for exchange in get_network_activities(eidb_name):
+        name = exchange["name"]
+        if name not in specific_network.values():
+            selected.append(exchange)
+        elif name == specific_network["land"] and country in land_cable_countries:
+            selected.append(exchange)
+        elif name == specific_network["subsea"] and country in subsea_cable_countries:
+            selected.append(exchange)
+        elif name == specific_network["construction"] and country == "CH":
+            selected.append(exchange)
+    return selected
+
+
 def create_activity_dict(
     dataframe_filt,
     known_inputs,
@@ -385,9 +450,9 @@ def create_activity_dict(
             name is left unchanged to avoid repeating it.
         consumption_profile (str, optional): Temporal weighting represented by
             the foreground inventory, stored as activity metadata.
-        inventory_resolution (str, optional): ``"annual"``, ``"monthly"``, or
-            ``"hourly"``. When omitted, time-indexed columns are treated as
-            hourly and country-only columns as annual for compatibility.
+        inventory_resolution (str, optional): ``"annual"`` or ``"monthly"``.
+            When omitted, time-indexed columns are treated as monthly and
+            country-only columns as annual for compatibility.
 
     Returns:
         dict: A dictionary containing activities to be written to the BW2 database.
@@ -397,7 +462,7 @@ def create_activity_dict(
     resolution = (
         validate_inventory_resolution(inventory_resolution)
         if inventory_resolution is not None
-        else ("hourly" if dataframe_filt.columns.nlevels > 1 else "annual")
+        else ("monthly" if dataframe_filt.columns.nlevels > 1 else "annual")
     )
     for i, col in enumerate(dataframe_filt.columns):
         if dataframe_filt.columns.nlevels > 1:
@@ -437,7 +502,7 @@ def create_activity_dict(
         }
         if activity_year is not None:
             act["year"] = activity_year
-        if consumption_profile is not None and resolution != "hourly":
+        if consumption_profile is not None:
             act["consumption_profile"] = str(consumption_profile)
         # Add the production exchange
         act["exchanges"].append(
@@ -461,91 +526,16 @@ def create_activity_dict(
                         "type": "technosphere",
                     }
                     act["exchanges"].append(new_exchange)
-        network = get_network_activities(eidb_name or db_name)
-        specific_network = [
-            "market for transmission network, electricity, high voltage direct current land cable",
-            "market for transmission network, electricity, high voltage direct current subsea cable",
-            "transmission network construction, electricity, high voltage",
-        ]
-        land_cable = [
-            "FR",
-            "IT",
-            "GR",
-            "DK",
-            "AT",
-            "BE",
-            "EE",
-            "ES",
-            "FI",
-            "HR",
-            "IT",
-            "LT",
-            "LV",
-            "ME",
-            "MT",
-            "NO",
-            "SE",
-            "TR",
-            "UK",
-        ]
-        subsea_cable = [
-            "FR",
-            "IT",
-            "GR",
-            "DK",
-            "EE",
-            "ES",
-            "FI",
-            "HR",
-            "IT",
-            "LT",
-            "ME",
-            "MT",
-            "NO",
-            "PL",
-            "UK",
-        ]
-        for exch_net in network:
-            if exch_net["name"] not in specific_network:
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
+        for exch_net in get_country_network_activities(eidb_name or db_name, country):
+            exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
+            if exchange:
+                act["exchanges"].append(
+                    {
                         "input": exchange,
                         "amount": float(exch_net["val"]),
                         "type": "technosphere",
                     }
-                    act["exchanges"].append(new_exchange)
-            if (
-                country in land_cable and exch_net["name"] == specific_network[0]
-            ):  # writing the land cable
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
-            if (
-                country in subsea_cable and exch_net["name"] == specific_network[1]
-            ):  # writing the subsea cable
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
-            if country == "CH" and exch_net["name"] == specific_network[2]:
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
+                )
         activities[(db_name, code)] = act
     return activities
 
@@ -611,8 +601,6 @@ def create_database(
 def _format_inventory_period(time, inventory_resolution):
     """Format a table-column timestamp for an activity name."""
     timestamp = pd.Timestamp(time)
-    if inventory_resolution == "hourly":
-        return timestamp.strftime("%Y-%m-%d %H:%M")
     if inventory_resolution == "monthly":
         return timestamp.strftime("%Y-%m")
     return str(timestamp.year)
@@ -630,8 +618,6 @@ def _inventory_comment(
     ]
     if period is not None:
         parts.append(f"Inventory period: {period}.")
-    if inventory_resolution == "hourly":
-        parts.append("Consumption profile: not applicable at hourly resolution.")
-    elif consumption_profile is not None:
+    if consumption_profile is not None:
         parts.append(f"Consumption profile: {consumption_profile}.")
     return " ".join(parts)

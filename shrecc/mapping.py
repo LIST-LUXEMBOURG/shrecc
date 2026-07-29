@@ -17,7 +17,7 @@ DEFAULT_FALLBACK_ACTIVITY = (
 )
 DEFAULT_MAPPING_TIME_CHUNK_SIZE = 168
 VALID_CONSUMPTION_PROFILES = {"flat", "national_demand"}
-VALID_INVENTORY_RESOLUTIONS = {"annual", "monthly", "hourly"}
+VALID_INVENTORY_RESOLUTIONS = {"annual", "monthly"}
 
 
 def _build_ecoinvent_mapping_operator(
@@ -254,8 +254,8 @@ def validate_inventory_resolution(inventory_resolution):
     spelling.
 
     Args:
-        inventory_resolution: ``"annual"``, ``"monthly"``, ``"hourly"``, or
-            the ``"yearly"`` alias.
+        inventory_resolution: ``"annual"``, ``"monthly"``, or the
+            ``"yearly"`` alias.
 
     Returns:
         The normalized resolution name.
@@ -269,9 +269,14 @@ def validate_inventory_resolution(inventory_resolution):
     normalized = inventory_resolution.strip().lower()
     if normalized == "yearly":
         normalized = "annual"
+    if normalized == "hourly":
+        raise ValueError(
+            "Hourly inventories are not written to Brightway. Use "
+            "NewDatabase.lcia() to calculate hourly impacts."
+        )
     if normalized not in VALID_INVENTORY_RESOLUTIONS:
         raise ValueError(
-            "inventory_resolution must be 'annual', 'monthly', or 'hourly'"
+            "inventory_resolution must be 'annual' or 'monthly'"
         )
     return normalized
 
@@ -294,12 +299,10 @@ def aggregate_consumption_mix(
     ``"national_demand"`` weights each consumer country by its corresponding
     hourly ``consumption_volume``. A custom Series supplies one common set of
     timestamp weights for all consumer countries. Profiles are applied within
-    each annual or monthly inventory. Hourly inventories retain the selected
-    mixes directly and ignore consumption-profile information.
+    each annual or monthly inventory.
 
     Time and country selection happen before weighting. Annual output has no
-    time dimension. Monthly output uses month-start timestamps, while hourly
-    output preserves the selected timestamps.
+    time dimension. Monthly output uses month-start timestamps.
 
     Args:
         consumption_mix: Dimensionless canonical DataArray resolved by time,
@@ -307,7 +310,7 @@ def aggregate_consumption_mix(
         consumption_profile: Built-in profile name or custom pandas Series.
         consumption_volume: Hourly volume DataArray required by
             ``"national_demand"``.
-        inventory_resolution: ``"annual"``, ``"monthly"``, or ``"hourly"``.
+        inventory_resolution: ``"annual"`` or ``"monthly"``.
         countries: Optional consumer countries to include.
         times: Optional exact timestamps to include.
         general_range: Optional inclusive start and end timestamps.
@@ -345,20 +348,6 @@ def aggregate_consumption_mix(
         refined_range=refined_range,
         freq=freq,
     )
-
-    if resolution == "hourly":
-        if consumption_profile is not None:
-            warnings.warn(
-                "consumption_profile is ignored when "
-                "inventory_resolution='hourly'.",
-                stacklevel=2,
-            )
-        selected = selected.rename("consumption_mix")
-        selected.attrs.update(consumption_mix.attrs)
-        selected.attrs["unit"] = "dimensionless"
-        selected.attrs["inventory_resolution"] = "hourly"
-        selected.attrs["consumption_profile"] = "not_applicable"
-        return selected
 
     profile = validate_consumption_profile(consumption_profile)
     selected_times = selected["time"].to_index()
@@ -729,6 +718,7 @@ def activity_mix_to_database_table(
     refined_range=None,
     freq=None,
     inventory_resolution="annual",
+    preserve_time=False,
 ):
     """Aggregate an activity mix into the table consumed by ``create_database``.
 
@@ -740,8 +730,10 @@ def activity_mix_to_database_table(
         general_range: Optional inclusive start and end timestamps.
         refined_range: Optional inclusive hour range inside ``general_range``.
         freq: Pandas frequency used to construct the refined selection.
-        inventory_resolution: Whether columns represent annual, monthly, or
-            hourly inventories.
+        inventory_resolution: Whether columns represent annual or monthly
+            inventories.
+        preserve_time: Keep hourly timestamps instead of applying annual
+            aggregation. Intended for in-memory assessment inputs.
 
     Returns:
         DataFrame indexed by activity geography, name, product, and unit, with
@@ -773,7 +765,7 @@ def activity_mix_to_database_table(
         refined_range=refined_range,
         freq=freq,
     )
-    if "time" in selected.dims and resolution == "annual":
+    if "time" in selected.dims and resolution == "annual" and not preserve_time:
         selected = selected.mean("time")
 
     table = selected.to_dataframe(name="share").reset_index()

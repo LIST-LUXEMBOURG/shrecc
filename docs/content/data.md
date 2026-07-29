@@ -76,15 +76,37 @@ the written foreground activities:
   year. `"yearly"` is accepted as an alias.
 - `"monthly"` writes one activity per consumer country and selected calendar
   month.
-- `"hourly"` writes one activity per consumer country and selected timestamp.
 
 Annual and monthly mixes apply `consumption_profile` independently within each
-inventory period before normalization. Hourly mixes are already resolved at
-their final temporal resolution, so profiles are ignored with a warning.
-Hourly timestamps must therefore be selected with `times`, `time_range`, and
-optionally `hour_range`.
+inventory period before normalization. Hourly mixes are retained as
+calculation data and are never written as Brightway activities. Calling
+`NewDatabase(..., inventory_resolution="hourly")` therefore raises with
+guidance to use `NewDatabase.lcia()`.
 
-Written activity names end in `YYYY`, `YYYY-MM`, or `YYYY-MM-DD HH:MM`,
-respectively. The resolution, represented period, and applicable consumption
-profile are also recorded in each Brightway activity's `comment` field for
-display in ActivityBrowser documentation.
+Written activity names end in `YYYY` or `YYYY-MM`. The resolution, represented
+period, and consumption profile are also recorded in each Brightway activity's
+`comment` field for display in ActivityBrowser documentation.
+
+## Temporal LCIA
+
+`NewDatabase.lcia()` calculates hourly LCIA intensities from retained canonical
+results without creating hourly foreground activities. With no explicit
+methods, it selects all installed Brightway methods whose method-family label
+is exactly `EF v3.1`.
+
+The default `linear` engine resolves and scores each unique background input
+once, maps consumer countries one at a time, and multiplies the resulting
+source-score matrix by hourly coefficients. The optional `multilca` engine
+submits the same coefficients as composite functional units in bounded
+`FastScoresOnlyMultiLCA` batches.
+
+```python
+assessment = electricity.lcia()
+assessment.hourly(2040)
+assessment.monthly()
+assessment.annual()
+```
+
+The hourly result includes LCIA intensity per kWh, raw consumption-profile
+weights, and each hour's contribution to the profile-weighted annual
+intensity.
