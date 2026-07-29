@@ -1,6 +1,24 @@
 SHRECC CHANGELOG
 ================
 
+## Unreleased
+
+### Added
+
+- Add `inventory_resolution` to `NewDatabase`. Annual inventories remain the
+  default; monthly inventories are weighted and normalized within each
+  calendar month, and hourly inventories preserve every selected solved mix.
+- Record annual, monthly, and hourly period labels in foreground activity
+  names and document the resolution, period, and applicable consumption
+  profile in the Brightway activity `comment`.
+- Accept `"yearly"` as an alias for `"annual"`.
+
+### Changed
+
+- Ignore `consumption_profile` with a warning for hourly inventories, where
+  each solved timestamp is already the final inventory. Custom profiles retain
+  their timestamp-selection priority for monthly and annual inventories only.
+
 ## 0.1.0.dev3
 
 ### Added

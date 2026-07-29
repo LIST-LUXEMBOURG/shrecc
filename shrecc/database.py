@@ -25,6 +25,7 @@ from shrecc.mapping import (
     activity_mix_to_database_table,
     load_ecoinvent_mapping as load_mapping_data,
     map_consumption_mix_to_ecoinvent_activities,
+    validate_inventory_resolution,
 )
 from shrecc.result_store import (
     MANIFEST_FILENAME,
@@ -367,6 +368,7 @@ def create_activity_dict(
     eidb_name=None,
     year=None,
     consumption_profile=None,
+    inventory_resolution=None,
 ):
     """
     Creates a dictionary of activities for the BW database based on the filtered dataframe and known inputs.
@@ -383,24 +385,30 @@ def create_activity_dict(
             name is left unchanged to avoid repeating it.
         consumption_profile (str, optional): Temporal weighting represented by
             the foreground inventory, stored as activity metadata.
+        inventory_resolution (str, optional): ``"annual"``, ``"monthly"``, or
+            ``"hourly"``. When omitted, time-indexed columns are treated as
+            hourly and country-only columns as annual for compatibility.
 
     Returns:
         dict: A dictionary containing activities to be written to the BW2 database.
     """
     activities = {}
     activity_year = int(year) if year is not None else None
+    resolution = (
+        validate_inventory_resolution(inventory_resolution)
+        if inventory_resolution is not None
+        else ("hourly" if dataframe_filt.columns.nlevels > 1 else "annual")
+    )
     for i, col in enumerate(dataframe_filt.columns):
         if dataframe_filt.columns.nlevels > 1:
             time, country = col
-            activity = f"{time} Electricity mix"
-            name = f"{activity} in {country}"
-            name_contains_year = str(activity_year) in str(time)
+            period = _format_inventory_period(time, resolution)
         else:
             country = col
-            name = f"Electricity mix in {country}"
-            name_contains_year = False
-        if activity_year is not None and not name_contains_year:
-            name = f"{name}, {activity_year}"
+            period = str(activity_year) if activity_year is not None else None
+        name = f"Electricity mix in {country}"
+        if period is not None:
+            name = f"{name}, {period}"
         code = f"electricity {i}"
         bd_version = bd.__version__
         if not isinstance(bd_version, str):
@@ -419,11 +427,17 @@ def create_activity_dict(
             "location": str(country),
             "reference product": "Electricity mix",
             "type": act_type,
+            "inventory_resolution": resolution,
+            "comment": _inventory_comment(
+                resolution,
+                period,
+                consumption_profile,
+            ),
             "exchanges": [],
         }
         if activity_year is not None:
             act["year"] = activity_year
-        if consumption_profile is not None:
+        if consumption_profile is not None and resolution != "hourly":
             act["consumption_profile"] = str(consumption_profile)
         # Add the production exchange
         act["exchanges"].append(
@@ -545,6 +559,7 @@ def create_database(
     strict=False,
     year=None,
     consumption_profile=None,
+    inventory_resolution=None,
 ):
     """
     Creates an "ecoinvent-like" BW database based on a previously filtered dataframe.
@@ -563,6 +578,8 @@ def create_database(
             and stored as activity metadata.
         consumption_profile (str, optional): Temporal weighting stored as
             foreground activity metadata.
+        inventory_resolution (str, optional): Temporal resolution stored in
+            activity names, metadata, and comments.
 
     Returns:
         None
@@ -585,6 +602,36 @@ def create_database(
         eidb_name=eidb_name,
         year=year,
         consumption_profile=consumption_profile,
+        inventory_resolution=inventory_resolution,
     )
     elec_db = setup_database(project_name, db_name)
     elec_db.write(activities)
+
+
+def _format_inventory_period(time, inventory_resolution):
+    """Format a table-column timestamp for an activity name."""
+    timestamp = pd.Timestamp(time)
+    if inventory_resolution == "hourly":
+        return timestamp.strftime("%Y-%m-%d %H:%M")
+    if inventory_resolution == "monthly":
+        return timestamp.strftime("%Y-%m")
+    return str(timestamp.year)
+
+
+def _inventory_comment(
+    inventory_resolution,
+    period,
+    consumption_profile,
+):
+    """Build ActivityBrowser documentation for a foreground inventory."""
+    parts = [
+        "SHRECC electricity consumption mix.",
+        f"Inventory resolution: {inventory_resolution}.",
+    ]
+    if period is not None:
+        parts.append(f"Inventory period: {period}.")
+    if inventory_resolution == "hourly":
+        parts.append("Consumption profile: not applicable at hourly resolution.")
+    elif consumption_profile is not None:
+        parts.append(f"Consumption profile: {consumption_profile}.")
+    return " ".join(parts)

@@ -21,6 +21,7 @@ from shrecc.mapping import (
     map_consumption_mix_to_ecoinvent_activities,
     mapping_gap_to_report,
     validate_consumption_profile,
+    validate_inventory_resolution,
 )
 from shrecc.premise_mapping import (
     PremiseConsumptionMixMapper,
@@ -108,6 +109,11 @@ class NewDatabase:
             custom Series defines its own timestamps and a Series contained
             within one calendar year is reused as a template for every model
             year.
+        inventory_resolution: Temporal resolution of written foreground
+            activities: ``"annual"`` (default), ``"monthly"``, or
+            ``"hourly"``. ``"yearly"`` is accepted as an alias for
+            ``"annual"``. Consumption profiles do not apply to hourly
+            inventories.
         include_consumption_mix_volume: Retain the resolved four-dimensional
             consumption volumes as well as normalized shares. Disable this to
             reduce memory and cache size when only inventory shares are needed.
@@ -127,9 +133,9 @@ class NewDatabase:
         verbose: Print progress information.
 
     After creation, hourly canonical results remain available in
-    ``consumption_results`` unless ``retain_hourly_results=False``. The
-    profile-weighted mapped inventories and final tables are available by year
-    in ``activity_mixes`` and ``database_tables``. Historical pre-cutoff
+    ``consumption_results`` unless ``retain_hourly_results=False``. The mapped
+    inventories at the configured resolution and final tables are available by
+    year in ``activity_mixes`` and ``database_tables``. Historical pre-cutoff
     diagnostics are retained in ``mapping_gap_reports``;
     :meth:`mapping_report` returns a defensive copy. Successfully written
     output names are recorded in ``written_database_names``.
@@ -173,6 +179,7 @@ class NewDatabase:
         network=True,
         zero_consumption="month_hour_average",
         consumption_profile="flat",
+        inventory_resolution="annual",
         include_consumption_mix_volume=True,
         retain_hourly_results=True,
         data_dir=None,
@@ -197,16 +204,30 @@ class NewDatabase:
                 "source must be one of: " + ", ".join(sorted(VALID_SOURCES))
             )
 
+        self.inventory_resolution = validate_inventory_resolution(
+            inventory_resolution
+        )
         self.consumption_profile = validate_consumption_profile(
             consumption_profile
         )
+        profile_defines_time = (
+            self.inventory_resolution != "hourly"
+            and isinstance(self.consumption_profile, pd.Series)
+        )
+        if self.inventory_resolution == "hourly":
+            warnings.warn(
+                "consumption_profile is ignored when "
+                "inventory_resolution='hourly'. Select hourly inventories "
+                "with times, time_range, and hour_range.",
+                stacklevel=2,
+            )
         _validate_time_selection(
             time_range,
             hour_range,
             times,
-            custom_profile=isinstance(self.consumption_profile, pd.Series),
+            custom_profile=profile_defines_time,
         )
-        if isinstance(self.consumption_profile, pd.Series):
+        if profile_defines_time:
             self.time_range = None
             self.hour_range = None
             self.times = None
@@ -214,10 +235,15 @@ class NewDatabase:
             self.time_range = time_range
             self.hour_range = hour_range
             self.times = times
-        self._consumption_profiles_by_year = _resolve_consumption_profiles(
-            self.consumption_profile,
-            self.years,
-        )
+        if self.inventory_resolution == "hourly":
+            self._consumption_profiles_by_year = {
+                year: None for year in self.years
+            }
+        else:
+            self._consumption_profiles_by_year = _resolve_consumption_profiles(
+                self.consumption_profile,
+                self.years,
+            )
 
         self.cutoff = float(cutoff)
         if self.cutoff < 0:
@@ -293,11 +319,11 @@ class NewDatabase:
         """Prepare mapped inventory tables without changing Brightway.
 
         Source data are acquired or loaded from cache, the interconnected
-        electricity system is solved, the requested times are profile-weighted,
-        technologies are mapped to background activities, and the cutoff is
-        applied. Existing results on this object are replaced, so calling this
-        method again rebuilds every configured year and can fill newly cached
-        source data.
+        electricity system is solved, and the requested times are resolved to
+        annual, monthly, or hourly inventories. Technologies are then mapped
+        to background activities and the cutoff is applied. Existing results
+        on this object are replaced, so calling this method again rebuilds
+        every configured year and can fill newly cached source data.
 
         Returns:
             This ``NewDatabase`` instance, allowing method chaining.
@@ -325,7 +351,8 @@ class NewDatabase:
         :meth:`create` is called automatically if not all configured years have
         prepared tables. Each configured year is written to its own output
         database, replacing an existing database with the same name.
-        Foreground activity names and metadata record the modeled year.
+        Foreground activity names and metadata record the modeled period and
+        inventory resolution.
 
         Returns:
             This ``NewDatabase`` instance, allowing method chaining.
@@ -347,6 +374,7 @@ class NewDatabase:
                 strict=self.strict,
                 year=year,
                 consumption_profile=self._consumption_profile_label(),
+                inventory_resolution=self.inventory_resolution,
             )
             self.written_database_names[year] = self.database_names[year]
         return self
@@ -359,8 +387,9 @@ class NewDatabase:
 
         Returns:
             DataFrame whose rows are background activities and whose columns
-            are consumer-country inventories. Values are electricity shares
-            after temporal aggregation and cutoff treatment.
+            are consumer-country inventories. Monthly and hourly tables use
+            ``(time, country)`` columns. Values are electricity shares after
+            temporal resolution and cutoff treatment.
 
         Raises:
             RuntimeError: If :meth:`create` has not prepared the table.
@@ -398,8 +427,8 @@ class NewDatabase:
     def mapping_report(self, year=None):
         """Return source technologies that required fallback mapping.
 
-        The report is calculated after time selection and consumption-profile
-        weighting but before cutoff. Rows identify
+        The report is calculated after time selection and temporal resolution
+        but before cutoff. Rows identify
         ``(source_country, technology)`` and columns identify consumer
         countries. Each value is the share of that consumer's inventory
         assigned to a source-country high-voltage production mix because no
@@ -505,6 +534,7 @@ class NewDatabase:
             results["consumption_mix"],
             consumption_profile=consumption_profile,
             consumption_volume=results["consumption_volume"],
+            inventory_resolution=self.inventory_resolution,
             countries=self.countries,
             general_range=time_range,
             refined_range=self.hour_range,
@@ -528,6 +558,7 @@ class NewDatabase:
         table = activity_mix_to_database_table(
             activity_mix,
             countries=self.countries,
+            inventory_resolution=self.inventory_resolution,
         )
         self._store_year(year, results, activity_mix, table)
 
@@ -576,6 +607,7 @@ class NewDatabase:
             results["consumption_mix"],
             consumption_profile=consumption_profile,
             consumption_volume=results["consumption_volume"],
+            inventory_resolution=self.inventory_resolution,
             countries=self.countries,
             general_range=time_range,
             refined_range=self.hour_range,
@@ -599,6 +631,7 @@ class NewDatabase:
             activity_mix,
             exchange_geography_map,
             countries=self.countries,
+            inventory_resolution=self.inventory_resolution,
         )
         self.exchange_geography_maps[year] = exchange_geography_map
         self.mapping_gap_reports[year] = pd.DataFrame(
@@ -648,6 +681,8 @@ class NewDatabase:
         return "tyndp" if year in PROSPECTIVE_YEARS else "energy_charts"
 
     def _consumption_profile_label(self):
+        if self.inventory_resolution == "hourly":
+            return None
         if isinstance(self.consumption_profile, str):
             return self.consumption_profile
         if self.consumption_profile.name is None:

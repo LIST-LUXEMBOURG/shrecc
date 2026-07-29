@@ -13,7 +13,8 @@ scenario data for prospective years, while exposing the same workflow for both.
 - Hourly production, trade, consumption-volume, and consumption-mix results.
 - One reduced country-network solver shared by Energy Charts and TYNDP data.
 - Historical ecoinvent allocation and prospective premise/IAM mapping.
-- Hourly, daily, weekly, monthly, and explicit timestamp selections.
+- Annual, monthly, or hourly Brightway inventories from range-based or
+  explicit timestamp selections.
 - Inspectable intermediate results before any Brightway database is changed.
 - Resumable source acquisition and compressed, time-chunked result caches.
 - Brightway 2 and 2.5 database writing through `NewDatabase`.
@@ -81,6 +82,7 @@ electricity = NewDatabase(
     hour_range=[10, 14],
     project_name="SHRECCei311",
     source="auto",
+    inventory_resolution="annual",
 )
 
 electricity.create()
@@ -90,7 +92,14 @@ electricity.write()
 For a multi-year run, the month/day/time selection is reused for each year and
 `write()` creates one foreground database per year. A year suffix is added to
 `my_db_name` automatically unless explicit year-specific names are supplied.
-Foreground activity names and metadata also record their model year.
+Foreground activity names and metadata also record their modeled period.
+
+`inventory_resolution` controls how many foreground activities are written:
+`"annual"` creates one activity per country and year, `"monthly"` creates one
+per country and selected calendar month, and `"hourly"` creates one per country
+and selected timestamp. Annual and monthly inventories apply
+`consumption_profile` within each period. Hourly inventories preserve each
+solved mix directly, so consumption-profile weighting does not apply.
 
 Intermediate canonical results and mapped tables remain available on the class
 instance through `results(year)` and `table(year)`. Use

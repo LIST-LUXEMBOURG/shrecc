@@ -1941,8 +1941,63 @@ def test_create_activity_dict_adds_year_and_profile_to_metadata(
     assert activity["name"] == "Electricity mix in FR, 2040"
     assert activity["year"] == 2040
     assert activity["consumption_profile"] == "national_demand"
+    assert activity["inventory_resolution"] == "annual"
+    assert "Inventory resolution: annual." in activity["comment"]
+    assert "Inventory period: 2040." in activity["comment"]
     assert activity["exchanges"][0]["name"] == activity["name"]
     mock_get_network_activities.assert_called_once_with("test_db")
+
+
+@patch("shrecc.database.get_network_activities", return_value=[])
+@pytest.mark.parametrize(
+    ("resolution", "expected_names", "profile_comment"),
+    [
+        (
+            "monthly",
+            [
+                "Electricity mix in FR, 2023-06",
+                "Electricity mix in DE, 2023-06",
+            ],
+            "Consumption profile: national_demand.",
+        ),
+        (
+            "hourly",
+            [
+                "Electricity mix in FR, 2023-06-01 08:00",
+                "Electricity mix in DE, 2023-06-01 09:00",
+            ],
+            "Consumption profile: not applicable at hourly resolution.",
+        ),
+    ],
+)
+def test_create_activity_dict_names_and_documents_resolved_periods(
+    mock_get_network_activities,
+    sample_dataframe_filt,
+    known_inputs_fixture,
+    resolution,
+    expected_names,
+    profile_comment,
+):
+    activities = create_activity_dict(
+        sample_dataframe_filt,
+        known_inputs_fixture,
+        {},
+        "test_db",
+        year=2023,
+        consumption_profile="national_demand",
+        inventory_resolution=resolution,
+    )
+
+    assert [activity["name"] for activity in activities.values()] == expected_names
+    for activity in activities.values():
+        assert activity["inventory_resolution"] == resolution
+        assert f"Inventory resolution: {resolution}." in activity["comment"]
+        assert profile_comment in activity["comment"]
+    if resolution == "hourly":
+        assert all(
+            "consumption_profile" not in activity
+            for activity in activities.values()
+        )
 
 
 # ────────────────────────────────────────────────────────────
@@ -1997,6 +2052,7 @@ def test_create_database_with_network_true(
         network="True",
         year=2040,
         consumption_profile="national_demand",
+        inventory_resolution=None,
     )
 
     # Check calls
@@ -2016,6 +2072,7 @@ def test_create_database_with_network_true(
         eidb_name="eidb",
         year=2040,
         consumption_profile="national_demand",
+        inventory_resolution=None,
     )
     mock_db.write.assert_called_once_with(activities)
 
@@ -2061,6 +2118,7 @@ def test_create_database_with_network_false(
         eidb_name="eidb",
         year=None,
         consumption_profile=None,
+        inventory_resolution=None,
     )
     mock_db.write.assert_called_once_with(activities)
 

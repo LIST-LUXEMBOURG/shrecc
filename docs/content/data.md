@@ -66,3 +66,25 @@ The resulting xarray Dataset can contain:
 
 The volume variables retain physical quantities for analysis and visualization;
 `consumption_mix` is normalized for mapping to life-cycle inventory activities.
+
+## Inventory resolution
+
+`NewDatabase(inventory_resolution=...)` controls the temporal resolution of
+the written foreground activities:
+
+- `"annual"` (the default) writes one activity per consumer country and model
+  year. `"yearly"` is accepted as an alias.
+- `"monthly"` writes one activity per consumer country and selected calendar
+  month.
+- `"hourly"` writes one activity per consumer country and selected timestamp.
+
+Annual and monthly mixes apply `consumption_profile` independently within each
+inventory period before normalization. Hourly mixes are already resolved at
+their final temporal resolution, so profiles are ignored with a warning.
+Hourly timestamps must therefore be selected with `times`, `time_range`, and
+optionally `hour_range`.
+
+Written activity names end in `YYYY`, `YYYY-MM`, or `YYYY-MM-DD HH:MM`,
+respectively. The resolution, represented period, and applicable consumption
+profile are also recorded in each Brightway activity's `comment` field for
+display in ActivityBrowser documentation.

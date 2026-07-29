@@ -1,5 +1,6 @@
 """Shared consumption-mix filtering and background activity mapping."""
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ DEFAULT_FALLBACK_ACTIVITY = (
 )
 DEFAULT_MAPPING_TIME_CHUNK_SIZE = 168
 VALID_CONSUMPTION_PROFILES = {"flat", "national_demand"}
+VALID_INVENTORY_RESOLUTIONS = {"annual", "monthly", "hourly"}
 
 
 def _build_ecoinvent_mapping_operator(
@@ -245,27 +247,59 @@ def validate_consumption_profile(consumption_profile):
     return normalized
 
 
+def validate_inventory_resolution(inventory_resolution):
+    """Validate and normalize the foreground inventory resolution.
+
+    ``"yearly"`` is accepted as an alias for the canonical ``"annual"``
+    spelling.
+
+    Args:
+        inventory_resolution: ``"annual"``, ``"monthly"``, ``"hourly"``, or
+            the ``"yearly"`` alias.
+
+    Returns:
+        The normalized resolution name.
+
+    Raises:
+        TypeError: If the value is not a string.
+        ValueError: If the resolution is unsupported.
+    """
+    if not isinstance(inventory_resolution, str):
+        raise TypeError("inventory_resolution must be a string")
+    normalized = inventory_resolution.strip().lower()
+    if normalized == "yearly":
+        normalized = "annual"
+    if normalized not in VALID_INVENTORY_RESOLUTIONS:
+        raise ValueError(
+            "inventory_resolution must be 'annual', 'monthly', or 'hourly'"
+        )
+    return normalized
+
+
 def aggregate_consumption_mix(
     consumption_mix,
     *,
     consumption_profile="flat",
     consumption_volume=None,
+    inventory_resolution="annual",
     countries=None,
     times=None,
     general_range=None,
     refined_range=None,
     freq=None,
 ):
-    """Aggregate hourly canonical mixes using a consumption profile.
+    """Resolve hourly canonical mixes to the requested inventory resolution.
 
     ``"flat"`` gives every selected hour equal weight.
     ``"national_demand"`` weights each consumer country by its corresponding
     hourly ``consumption_volume``. A custom Series supplies one common set of
-    timestamp weights for all consumer countries.
+    timestamp weights for all consumer countries. Profiles are applied within
+    each annual or monthly inventory. Hourly inventories retain the selected
+    mixes directly and ignore consumption-profile information.
 
-    Time and country selection happen before weighting. The returned mix has
-    no time dimension and can therefore be mapped directly to background
-    activities without materializing an hourly activity array.
+    Time and country selection happen before weighting. Annual output has no
+    time dimension. Monthly output uses month-start timestamps, while hourly
+    output preserves the selected timestamps.
 
     Args:
         consumption_mix: Dimensionless canonical DataArray resolved by time,
@@ -273,6 +307,7 @@ def aggregate_consumption_mix(
         consumption_profile: Built-in profile name or custom pandas Series.
         consumption_volume: Hourly volume DataArray required by
             ``"national_demand"``.
+        inventory_resolution: ``"annual"``, ``"monthly"``, or ``"hourly"``.
         countries: Optional consumer countries to include.
         times: Optional exact timestamps to include.
         general_range: Optional inclusive start and end timestamps.
@@ -280,7 +315,7 @@ def aggregate_consumption_mix(
         freq: Frequency used to construct the refined selection.
 
     Returns:
-        Profile-weighted, dimensionless canonical mix without a time dimension.
+        Dimensionless canonical mix at the requested inventory resolution.
 
     Raises:
         ValueError: If dimensions, timestamp coverage, weights, or national
@@ -299,7 +334,7 @@ def aggregate_consumption_mix(
             + ", ".join(sorted(missing_dims))
         )
 
-    profile = validate_consumption_profile(consumption_profile)
+    resolution = validate_inventory_resolution(inventory_resolution)
     selected = consumption_mix
     if countries is not None:
         selected = selected.sel(consumer_country=list(countries))
@@ -311,6 +346,21 @@ def aggregate_consumption_mix(
         freq=freq,
     )
 
+    if resolution == "hourly":
+        if consumption_profile is not None:
+            warnings.warn(
+                "consumption_profile is ignored when "
+                "inventory_resolution='hourly'.",
+                stacklevel=2,
+            )
+        selected = selected.rename("consumption_mix")
+        selected.attrs.update(consumption_mix.attrs)
+        selected.attrs["unit"] = "dimensionless"
+        selected.attrs["inventory_resolution"] = "hourly"
+        selected.attrs["consumption_profile"] = "not_applicable"
+        return selected
+
+    profile = validate_consumption_profile(consumption_profile)
     selected_times = selected["time"].to_index()
     selected_countries = selected["consumer_country"].to_index()
     if isinstance(profile, str) and profile == "flat":
@@ -374,27 +424,49 @@ def aggregate_consumption_mix(
     if (weight_values < 0).any():
         raise ValueError("Selected consumption weights cannot be negative")
 
-    weight_totals = weights.sum("time")
-    zero_totals = weight_totals <= 0
-    if bool(zero_totals.any()):
-        if "consumer_country" in zero_totals.dims:
-            countries_without_weight = (
-                zero_totals["consumer_country"].where(zero_totals, drop=True)
+    if resolution == "monthly":
+        monthly_mixes = []
+        month_periods = selected_times.to_period("M")
+        for month in month_periods.unique():
+            positions = np.flatnonzero(month_periods == month)
+            period_mix = selected.isel(time=positions)
+            period_weights = weights.isel(time=positions)
+            weight_totals = period_weights.sum("time")
+            _raise_for_zero_weight_totals(
+                weight_totals,
+                period=str(month),
             )
-            details = ": " + ", ".join(
-                map(str, countries_without_weight.to_numpy())
+            if profile_name == "flat":
+                aggregated_period = period_mix.mean("time")
+            else:
+                aggregated_period = xr.dot(
+                    period_mix,
+                    period_weights / weight_totals,
+                    dim="time",
+                )
+            monthly_mixes.append(
+                aggregated_period.expand_dims(
+                    time=[month.start_time],
+                )
             )
-        else:
-            details = ""
-        raise ValueError(
-            "Selected consumption weights must sum to more than zero" + details
+        aggregated = xr.concat(monthly_mixes, dim="time")
+        aggregated = aggregated.transpose(
+            "time",
+            "consumer_country",
+            "source_country",
+            "technology",
         )
-
-    if profile_name == "flat":
-        aggregated = selected.mean("time")
     else:
-        normalized_weights = weights / weight_totals
-        aggregated = xr.dot(selected, normalized_weights, dim="time")
+        weight_totals = weights.sum("time")
+        _raise_for_zero_weight_totals(weight_totals)
+        if profile_name == "flat":
+            aggregated = selected.mean("time")
+        else:
+            aggregated = xr.dot(
+                selected,
+                weights / weight_totals,
+                dim="time",
+            )
         aggregated = aggregated.transpose(
             "consumer_country",
             "source_country",
@@ -404,9 +476,32 @@ def aggregate_consumption_mix(
     aggregated.attrs.update(consumption_mix.attrs)
     aggregated.attrs["unit"] = "dimensionless"
     aggregated.attrs["consumption_profile"] = profile_name
+    aggregated.attrs["inventory_resolution"] = resolution
     if profile_name == "custom" and profile.name is not None:
         aggregated.attrs["consumption_profile_name"] = str(profile.name)
     return aggregated
+
+
+def _raise_for_zero_weight_totals(weight_totals, period=None):
+    """Raise with coordinate details when a weighted period has no demand."""
+    zero_totals = weight_totals <= 0
+    if not bool(zero_totals.any()):
+        return
+
+    zero_positions = np.argwhere(zero_totals.to_numpy())
+    examples = []
+    for position in zero_positions[:5]:
+        labels = [
+            str(zero_totals[dimension].to_numpy()[index])
+            for dimension, index in zip(zero_totals.dims, position)
+        ]
+        examples.append(" / ".join(labels))
+    details = ": " + ", ".join(examples) if examples else ""
+    if period is not None:
+        details = f" in {period}" + details
+    raise ValueError(
+        "Selected consumption weights must sum to more than zero" + details
+    )
 
 
 def map_consumption_mix_to_ecoinvent_activities(
@@ -633,6 +728,7 @@ def activity_mix_to_database_table(
     general_range=None,
     refined_range=None,
     freq=None,
+    inventory_resolution="annual",
 ):
     """Aggregate an activity mix into the table consumed by ``create_database``.
 
@@ -644,6 +740,8 @@ def activity_mix_to_database_table(
         general_range: Optional inclusive start and end timestamps.
         refined_range: Optional inclusive hour range inside ``general_range``.
         freq: Pandas frequency used to construct the refined selection.
+        inventory_resolution: Whether columns represent annual, monthly, or
+            hourly inventories.
 
     Returns:
         DataFrame indexed by activity geography, name, product, and unit, with
@@ -664,6 +762,7 @@ def activity_mix_to_database_table(
             + ", ".join(sorted(missing_coords))
         )
 
+    resolution = validate_inventory_resolution(inventory_resolution)
     selected = activity_mix
     if countries is not None:
         selected = selected.sel(consumer_country=list(countries))
@@ -674,20 +773,32 @@ def activity_mix_to_database_table(
         refined_range=refined_range,
         freq=freq,
     )
-    if "time" in selected.dims:
+    if "time" in selected.dims and resolution == "annual":
         selected = selected.mean("time")
 
     table = selected.to_dataframe(name="share").reset_index()
-    table = (
-        table.groupby(
-            ["geography", "activity_name", "product", "unit", "consumer_country"],
-            dropna=False,
-        )["share"]
-        .sum()
-        .unstack("consumer_country", fill_value=0)
-    )
+    row_levels = ["geography", "activity_name", "product", "unit"]
+    if "time" in selected.dims:
+        table = (
+            table.groupby(
+                [*row_levels, "time", "consumer_country"],
+                dropna=False,
+            )["share"]
+            .sum()
+            .unstack(["time", "consumer_country"], fill_value=0)
+        )
+        table.columns.names = ["time", "country"]
+    else:
+        table = (
+            table.groupby(
+                [*row_levels, "consumer_country"],
+                dropna=False,
+            )["share"]
+            .sum()
+            .unstack("consumer_country", fill_value=0)
+        )
+        table.columns.name = None
     table.index.names = ["geography", "activityName", "product", "unit"]
-    table.columns.name = None
     return table
 
 

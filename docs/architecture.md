@@ -16,6 +16,9 @@ shared country-network solver
 consumption_mix + retained physical volumes
         |
         v
+annual/monthly/hourly inventory resolution
+        |
+        v
 ecoinvent or premise mapping
         |
         v
@@ -59,7 +62,9 @@ implementation and can be removed in a future breaking release.
 1. Source modules end at canonical solver inputs or canonical results.
 2. The solver has no knowledge of Energy Charts, TYNDP, ecoinvent, premise, or
    Brightway.
-3. Mapping depends on canonical results, never on source-specific raw tables.
-4. Database writing depends on mapped activity tables, never on graph algebra.
-5. High-level orchestration belongs in `pipeline.py` and must compose the lower
+3. Temporal inventory resolution is applied to canonical mixes before
+   background activity mapping.
+4. Mapping depends on canonical results, never on source-specific raw tables.
+5. Database writing depends on mapped activity tables, never on graph algebra.
+6. High-level orchestration belongs in `pipeline.py` and must compose the lower
    layers rather than reimplement them.

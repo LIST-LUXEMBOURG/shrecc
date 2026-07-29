@@ -394,7 +394,63 @@ def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch)
         strict=False,
         year=year,
         consumption_profile="flat",
+        inventory_resolution="annual",
     )
+
+
+def test_monthly_resolution_reaches_mapping_table_and_writer(monkeypatch):
+    year = 2040
+    times = pd.date_range(f"{year}-06-01 10:00", periods=2, freq="h")
+    results = _canonical_results(year)
+    mapper = MagicMock()
+    mapper.map_technologies.return_value = _premise_activity_mix(year)
+    mapper.build_exchange_geography_map.return_value = pd.DataFrame(
+        {"FR": ["FR"]},
+        index=pd.Index(["wind activity"], name="premise_activity"),
+    )
+    table_builder = MagicMock(return_value=_database_table())
+    write_database = MagicMock()
+
+    monkeypatch.setattr(
+        "shrecc.pipeline.build_z_gross_from_tyndp_scenario",
+        MagicMock(return_value=pd.DataFrame({"value": [1.0, 2.0]}, index=times)),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.consumption_results_from_z_gross",
+        MagicMock(return_value=results),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.PremiseConsumptionMixMapper",
+        MagicMock(return_value=mapper),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.premise_activity_mix_to_database_table",
+        table_builder,
+    )
+    monkeypatch.setattr("shrecc.pipeline.create_database", write_database)
+
+    database = NewDatabase(
+        scenario="DE",
+        years=year,
+        climate_year=2009,
+        bg_db_name="premise-remind-eu-2040",
+        my_db_name="shrecc_monthly",
+        countries=["FR"],
+        time_range=[times[0], times[-1]],
+        project_name="project",
+        inventory_resolution="monthly",
+        cutoff=0,
+        include_cutoff=False,
+    ).create()
+
+    mapped_mix = mapper.map_technologies.call_args.args[0]
+    assert mapped_mix["time"].to_index().equals(pd.to_datetime(["2040-06-01"]))
+    assert mapped_mix.attrs["inventory_resolution"] == "monthly"
+    assert table_builder.call_args.kwargs["inventory_resolution"] == "monthly"
+
+    database.write()
+
+    assert write_database.call_args.kwargs["inventory_resolution"] == "monthly"
 
 
 def test_create_can_release_hourly_results_after_aggregation(monkeypatch):
@@ -605,6 +661,47 @@ def test_custom_profile_warns_and_ignores_explicit_time_selection():
     assert database.time_range is None
     assert database.hour_range is None
     assert database._selection_for_year(2025)[1].equals(profile.index)
+
+
+def test_hourly_resolution_ignores_custom_profile_but_uses_explicit_times():
+    profile = pd.Series(
+        [1.0],
+        index=pd.to_datetime(["2024-01-01 00:00"]),
+    )
+    requested_times = pd.to_datetime(["2025-06-01 10:00", "2025-06-01 11:00"])
+
+    with pytest.warns(UserWarning, match="consumption_profile is ignored"):
+        database = NewDatabase(
+            years=2025,
+            source="energy_charts",
+            bg_db_name="ecoinvent",
+            my_db_name="shrecc_hourly",
+            countries=["FR"],
+            project_name="project",
+            inventory_resolution="hourly",
+            consumption_profile=profile,
+            times=requested_times,
+        )
+
+    assert database.inventory_resolution == "hourly"
+    assert database._consumption_profiles_by_year == {2025: None}
+    assert database._selection_for_year(2025)[1].equals(requested_times)
+    assert database._consumption_profile_label() is None
+
+
+def test_yearly_inventory_resolution_is_normalized_to_annual():
+    database = NewDatabase(
+        years=2025,
+        source="energy_charts",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc_annual",
+        countries=["FR"],
+        project_name="project",
+        inventory_resolution="yearly",
+        times=["2025-06-01 10:00"],
+    )
+
+    assert database.inventory_resolution == "annual"
 
 
 def test_february_29_is_dropped_with_warning_for_non_leap_model_year():
