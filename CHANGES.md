@@ -1,6 +1,14 @@
 SHRECC CHANGELOG
 ================
 
+## 0.1.0.dev2 - 2026-07-27
+
+- Update stale links in README.md
+
+## 0.1.0.dev1 - 2026-07-27
+
+- Add example notebooks
+
 ## 0.1.0 - 2026-07-22
 
 This release unifies historical SHRECC and prospective TYNDP/FIONA processing
