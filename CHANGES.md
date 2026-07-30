@@ -1,7 +1,7 @@
 SHRECC CHANGELOG
 ================
 
-## Unreleased
+## 0.1.1 - 2026-07-30
 
 ### Added
 
