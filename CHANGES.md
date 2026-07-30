@@ -30,6 +30,10 @@ SHRECC CHANGELOG
   temporal LCIA.
 - Default an omitted `time_range` and `times` selection to the complete first
   configured year, rebased to each year in a multi-year run.
+- Index each Brightway background database once per LCIA year instead of
+  repeatedly scanning every background activity for every mapped exchange.
+- Build mapped activity tables directly from labelled arrays instead of
+  expanding hourly values into long pandas tables and pivoting them back.
 
 ## 0.1.0.dev3
 

@@ -555,6 +555,12 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
     calculate = MagicMock(return_value=intensity)
     monkeypatch.setattr("shrecc.pipeline.calculate_lcia", calculate)
     monkeypatch.setattr("shrecc.pipeline.bd.projects.set_current", MagicMock())
+    background_index = object()
+    build_background_index = MagicMock(return_value=background_index)
+    monkeypatch.setattr(
+        "shrecc.pipeline.build_background_activity_index",
+        build_background_index,
+    )
 
     lcia_results = database.lcia()
 
@@ -570,6 +576,7 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
         background_database="ecoinvent",
         include_network=True,
         strict=False,
+        background_index=background_index,
     )
     calculate.assert_called_once_with(
         basis,
@@ -578,6 +585,7 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
         batch_size=1000,
         source_score_cache={},
     )
+    build_background_index.assert_called_once_with("ecoinvent")
 
 
 def test_lcia_requires_retained_hourly_results():

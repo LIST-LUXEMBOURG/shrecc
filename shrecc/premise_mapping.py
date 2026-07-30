@@ -9,6 +9,7 @@ import pandas as pd
 import xarray as xr
 
 from shrecc.mapping import (
+    _database_table_from_feature_values,
     filter_consumption_mix_time,
     load_ecoinvent_mapping,
     validate_inventory_resolution,
@@ -474,58 +475,39 @@ def premise_activity_mix_to_database_table(
     if exchange_geography_map.isna().to_numpy().any():
         raise ValueError("exchange_geography_map is missing required entries")
 
-    exchange_geographies = (
-        exchange_geography_map.rename_axis(
-            index="premise_activity",
-            columns="source_country",
-        )
-        .stack()
-        .rename("geography")
-        .reset_index()
-    )
-
-    table = mix.to_dataframe(name="share").reset_index()
-    table = table.merge(
-        exchange_geographies,
-        on=["premise_activity", "source_country"],
-        how="left",
-        validate="many_to_one",
-    )
-    if table["geography"].isna().any():
-        raise ValueError("Could not assign exchange geography to all rows")
-
-    row_levels = ["geography", "premise_activity"]
     if "time" in mix.dims:
-        table = (
-            table.groupby(
-                [*row_levels, "time", "consumer_country"],
-                dropna=False,
-            )["share"]
-            .sum()
-            .unstack(["time", "consumer_country"], fill_value=0)
+        ordered = mix.transpose(
+            "source_country",
+            "premise_activity",
+            "time",
+            "consumer_country",
         )
-        table.columns.names = ["time", "country"]
+        times = ordered["time"].to_index()
     else:
-        table = (
-            table.groupby(
-                [*row_levels, "consumer_country"],
-                dropna=False,
-            )["share"]
-            .sum()
-            .unstack("consumer_country", fill_value=0)
+        ordered = mix.transpose(
+            "source_country",
+            "premise_activity",
+            "consumer_country",
         )
-        table.columns.name = None
+        times = None
 
-    table.index = pd.MultiIndex.from_arrays(
+    feature_count = len(source_countries) * len(premise_activities)
+    row_index = pd.MultiIndex.from_arrays(
         [
-            table.index.get_level_values("geography"),
-            table.index.get_level_values("premise_activity"),
-            [product] * len(table),
-            [unit] * len(table),
+            exchange_geography_map.T.to_numpy().reshape(feature_count),
+            np.tile(premise_activities.to_numpy(), len(source_countries)),
+            np.repeat(product, feature_count),
+            np.repeat(unit, feature_count),
         ],
         names=["geography", "activityName", "product", "unit"],
     )
-    return table
+    values = ordered.to_numpy().reshape(feature_count, -1)
+    return _database_table_from_feature_values(
+        values,
+        row_index,
+        countries=ordered["consumer_country"].to_index(),
+        times=times,
+    )
 
 
 def _validate_activity_share_builder_input(

@@ -136,6 +136,7 @@ def build_resolved_inventory_basis(
     background_database,
     include_network=True,
     strict=False,
+    background_index=None,
 ):
     """Resolve an hourly mapped table to a fixed Brightway input basis."""
     if not isinstance(table.columns, pd.MultiIndex) or table.columns.nlevels != 2:
@@ -149,6 +150,7 @@ def build_resolved_inventory_basis(
         table,
         strict=strict,
         include_network=include_network,
+        background_index=background_index,
     )
     coefficients = {}
     column_count = len(table.columns)

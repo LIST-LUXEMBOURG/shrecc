@@ -768,29 +768,61 @@ def activity_mix_to_database_table(
     if "time" in selected.dims and resolution == "annual" and not preserve_time:
         selected = selected.mean("time")
 
-    table = selected.to_dataframe(name="share").reset_index()
-    row_levels = ["geography", "activity_name", "product", "unit"]
     if "time" in selected.dims:
-        table = (
-            table.groupby(
-                [*row_levels, "time", "consumer_country"],
-                dropna=False,
-            )["share"]
-            .sum()
-            .unstack(["time", "consumer_country"], fill_value=0)
+        ordered = selected.transpose(
+            "activity",
+            "time",
+            "consumer_country",
         )
-        table.columns.names = ["time", "country"]
+        times = ordered["time"].to_index()
     else:
-        table = (
-            table.groupby(
-                [*row_levels, "consumer_country"],
-                dropna=False,
-            )["share"]
-            .sum()
-            .unstack("consumer_country", fill_value=0)
+        ordered = selected.transpose(
+            "activity",
+            "consumer_country",
         )
-        table.columns.name = None
-    table.index.names = ["geography", "activityName", "product", "unit"]
+        times = None
+
+    row_index = pd.MultiIndex.from_arrays(
+        [
+            ordered["geography"].to_numpy(),
+            ordered["activity_name"].to_numpy(),
+            ordered["product"].to_numpy(),
+            ordered["unit"].to_numpy(),
+        ],
+        names=["geography", "activityName", "product", "unit"],
+    )
+    values = ordered.to_numpy().reshape(len(row_index), -1)
+    return _database_table_from_feature_values(
+        values,
+        row_index,
+        countries=ordered["consumer_country"].to_index(),
+        times=times,
+    )
+
+
+def _database_table_from_feature_values(
+    values,
+    row_index,
+    *,
+    countries,
+    times=None,
+):
+    """Build a database table directly from feature-by-observation values."""
+    if times is None:
+        columns = pd.Index(countries)
+        columns.name = None
+    else:
+        columns = pd.MultiIndex.from_product(
+            [pd.DatetimeIndex(times), pd.Index(countries)],
+            names=["time", "country"],
+        )
+    table = pd.DataFrame(values, index=row_index, columns=columns)
+    if table.index.has_duplicates:
+        table = table.groupby(
+            level=list(range(table.index.nlevels)),
+            dropna=False,
+            sort=True,
+        ).sum()
     return table
 
 
