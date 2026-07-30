@@ -95,9 +95,10 @@ class NewDatabase:
         climate_year: Weather year used by TYNDP. Required for TYNDP years.
         iam: IAM geography model used by premise, currently typically
             ``"remind-eu"``.
-        time_range: Two timestamps defining an inclusive period. For a
-            multi-year run, their month, day, and time are reused in each year.
-            A February 29 boundary is clipped to February 28 in non-leap years.
+        time_range: Two timestamps defining an inclusive period. When omitted,
+            the complete first configured year is used. For a multi-year run,
+            the selected month, day, and time are reused in each year. A
+            February 29 boundary is clipped to February 28 in non-leap years.
             Ignored with a warning when a custom consumption Series is used.
         hour_range: Optional inclusive daily hour range within ``time_range``,
             for example ``[10, 14]``. Ignored with a custom Series.
@@ -225,6 +226,12 @@ class NewDatabase:
             consumption_profile
         )
         profile_defines_time = isinstance(self.consumption_profile, pd.Series)
+        if not profile_defines_time and time_range is None and times is None:
+            first_year = self.years[0]
+            time_range = [
+                f"{first_year}-01-01 00:00:00",
+                f"{first_year}-12-31 23:00:00",
+            ]
         _validate_time_selection(
             time_range,
             hour_range,
@@ -949,8 +956,6 @@ def _validate_time_selection(
             )
         return
 
-    if time_range is None and times is None:
-        raise ValueError("Either time_range or times must be provided")
     if time_range is not None and times is not None:
         raise ValueError("Use either time_range or times, not both")
     if time_range is not None and len(time_range) != 2:

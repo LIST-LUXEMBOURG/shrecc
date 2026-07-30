@@ -28,6 +28,8 @@ SHRECC CHANGELOG
   input scores across countries to bound memory use.
 - Reuse country-specific network-selection rules in database writing and
   temporal LCIA.
+- Default an omitted `time_range` and `times` selection to the complete first
+  configured year, rebased to each year in a multi-year run.
 
 ## 0.1.0.dev3
 

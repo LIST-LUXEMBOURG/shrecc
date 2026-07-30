@@ -658,6 +658,48 @@ def test_multi_year_names_and_time_ranges_are_expanded():
     assert database._selection_for_year(2035)[0][0].year == 2035
 
 
+def test_missing_time_selection_defaults_to_each_complete_year():
+    database = NewDatabase(
+        years=[2025, 2026],
+        source="energy_charts",
+        bg_db_name="ecoinvent-{year}",
+        my_db_name="shrecc_annual",
+        countries=["FR"],
+        project_name="project",
+    )
+
+    assert database.time_range == [
+        "2025-01-01 00:00:00",
+        "2025-12-31 23:00:00",
+    ]
+    range_2025, _ = database._selection_for_year(2025)
+    range_2026, _ = database._selection_for_year(2026)
+    assert range_2025 == list(
+        pd.to_datetime(["2025-01-01 00:00:00", "2025-12-31 23:00:00"])
+    )
+    assert range_2026 == list(
+        pd.to_datetime(["2026-01-01 00:00:00", "2026-12-31 23:00:00"])
+    )
+
+
+def test_hour_range_uses_default_complete_year():
+    database = NewDatabase(
+        years=2025,
+        source="energy_charts",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc_daytime",
+        countries=["FR"],
+        project_name="project",
+        hour_range=[10, 14],
+    )
+
+    assert database.time_range == [
+        "2025-01-01 00:00:00",
+        "2025-12-31 23:00:00",
+    ]
+    assert database.hour_range == [10, 14]
+
+
 def test_february_time_range_clips_leap_day_for_non_leap_model_years():
     database = NewDatabase(
         years=[2035, 2040, 2050],
