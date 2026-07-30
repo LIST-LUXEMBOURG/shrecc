@@ -10,6 +10,7 @@ from shrecc.mapping import (
     map_consumption_mix_to_ecoinvent_activities,
     mapping_gap_to_report,
     validate_consumption_profile,
+    validate_inventory_resolution,
 )
 
 
@@ -130,6 +131,67 @@ def test_national_demand_profile_weights_each_consumer_country_separately():
         aggregated.sum(["source_country", "technology"]),
         1,
     )
+
+
+def test_monthly_resolution_applies_profile_within_each_month():
+    times = pd.to_datetime(
+        [
+            "2040-01-01 00:00",
+            "2040-01-02 00:00",
+            "2040-02-01 00:00",
+            "2040-02-02 00:00",
+        ]
+    )
+    consumption_mix = xr.DataArray(
+        [[[[1.0], [0.0]]], [[[0.0], [1.0]]], [[[0.2], [0.8]]], [[[0.6], [0.4]]]],
+        dims=("time", "consumer_country", "source_country", "technology"),
+        coords={
+            "time": times,
+            "consumer_country": ["FR"],
+            "source_country": ["domestic", "imported"],
+            "technology": ["electricity"],
+        },
+        name="consumption_mix",
+    )
+    consumption_volume = xr.DataArray(
+        [[1.0], [3.0], [2.0], [2.0]],
+        dims=("time", "consumer_country"),
+        coords={"time": times, "consumer_country": ["FR"]},
+    )
+
+    aggregated = aggregate_consumption_mix(
+        consumption_mix,
+        consumption_profile="national_demand",
+        consumption_volume=consumption_volume,
+        inventory_resolution="monthly",
+    )
+
+    assert (
+        aggregated["time"]
+        .to_index()
+        .equals(pd.to_datetime(["2040-01-01", "2040-02-01"]))
+    )
+    np.testing.assert_allclose(
+        aggregated.sel(source_country="domestic").to_numpy().ravel(),
+        [0.25, 0.4],
+    )
+    np.testing.assert_allclose(
+        aggregated.sum(["source_country", "technology"]),
+        1,
+    )
+    assert aggregated.attrs["inventory_resolution"] == "monthly"
+
+
+def test_hourly_inventory_resolution_points_to_lcia():
+    with pytest.raises(
+        ValueError,
+        match=r"Use NewDatabase\.lcia\(\)",
+    ):
+        validate_inventory_resolution("hourly")
+
+
+def test_yearly_inventory_resolution_is_an_annual_alias():
+    assert validate_inventory_resolution("yearly") == "annual"
 
 
 def test_custom_profile_is_shared_between_countries_and_scale_invariant():
@@ -264,6 +326,28 @@ def test_activity_mix_table_reuses_range_selection_and_averages_time():
         ],
         0.4,
     )
+
+
+def test_activity_mix_table_can_preserve_time_for_assessment():
+    activity_mix = map_consumption_mix_to_ecoinvent_activities(
+        _consumption_mix(),
+        _activity_mapping(),
+    )
+
+    table = activity_mix_to_database_table(
+        activity_mix,
+        countries=["FR"],
+        inventory_resolution="annual",
+        preserve_time=True,
+    )
+
+    assert table.columns.names == ["time", "country"]
+    assert (
+        table.columns.get_level_values("time")
+        .unique()
+        .equals(_consumption_mix()["time"].to_index())
+    )
+    np.testing.assert_allclose(table.sum(axis=0), 1)
 
 
 def test_mapping_gaps_are_reported_by_source_technology_and_consumer():

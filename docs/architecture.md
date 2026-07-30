@@ -15,14 +15,19 @@ shared country-network solver
         v
 consumption_mix + retained physical volumes
         |
-        v
-ecoinvent or premise mapping
-        |
-        v
-filtered activity table
-        |
-        v
-Brightway database
+        +-----------------------------+
+        |                             |
+        v                             v
+annual/monthly aggregation      hourly lazy mapping
+        |                             |
+        v                             v
+ecoinvent or premise mapping    fixed background input basis
+        |                             |
+        v                             v
+filtered activity table         linear or MultiLCA scoring
+        |                             |
+        v                             v
+Brightway database              labelled LCIA results
 ```
 
 ## Modules
@@ -41,6 +46,8 @@ Brightway database
   shared mapping conventions.
 - `database.py`: Cutoff handling, Brightway activity lookup, and database
   construction/writing.
+- `lcia.py`: Fixed background-input resolution, EF v3.1 method selection,
+  optimized temporal scoring, and labelled LCIA results.
 - `pipeline.py`: The public `NewDatabase` workflow and inspectable pipeline
   state.
 - `analysis.py`: Delivered-electricity graph resolution and reusable
@@ -59,7 +66,11 @@ implementation and can be removed in a future breaking release.
 1. Source modules end at canonical solver inputs or canonical results.
 2. The solver has no knowledge of Energy Charts, TYNDP, ecoinvent, premise, or
    Brightway.
-3. Mapping depends on canonical results, never on source-specific raw tables.
-4. Database writing depends on mapped activity tables, never on graph algebra.
-5. High-level orchestration belongs in `pipeline.py` and must compose the lower
+3. Annual/monthly inventory resolution is applied to canonical mixes before
+   background activity mapping.
+4. Mapping depends on canonical results, never on source-specific raw tables.
+5. Database writing depends on mapped activity tables, never on graph algebra.
+6. High-level orchestration belongs in `pipeline.py` and must compose the lower
    layers rather than reimplement them.
+7. Hourly mixes are calculation data. They are assessed in memory and are not
+   written as Brightway foreground activities.

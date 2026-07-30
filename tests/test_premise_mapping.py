@@ -483,6 +483,24 @@ def test_premise_activity_mix_to_database_table_uses_exchange_geography():
     np.testing.assert_allclose(table.sum(), 1)
 
 
+def test_premise_activity_mix_table_preserves_monthly_columns():
+    times = pd.to_datetime(["2050-01-01", "2050-02-01"])
+    mix, exchange_map = _premise_activity_time_series(
+        times,
+        [0.2, 0.8],
+    )
+
+    table = premise_activity_mix_to_database_table(
+        mix,
+        exchange_map,
+        inventory_resolution="monthly",
+    )
+
+    assert table.columns.names == ["time", "country"]
+    assert table.columns.get_level_values("time").unique().equals(times)
+    np.testing.assert_allclose(table.sum(axis=0), 1)
+
+
 def _premise_activity_time_series(times, first_activity_shares):
     first_activity_shares = np.asarray(first_activity_shares)
     values = np.column_stack(

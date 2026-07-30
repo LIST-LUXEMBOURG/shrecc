@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from shrecc.mapping import filter_consumption_mix_time, load_ecoinvent_mapping
+from shrecc.mapping import (
+    filter_consumption_mix_time,
+    load_ecoinvent_mapping,
+    validate_inventory_resolution,
+)
 from shrecc.tyndp import load_technology_concordance
 
 
@@ -406,6 +410,8 @@ def premise_activity_mix_to_database_table(
     general_range=None,
     refined_range=None,
     freq=None,
+    inventory_resolution="annual",
+    preserve_time=False,
     product="electricity, high voltage",
     unit="kWh",
 ):
@@ -423,6 +429,10 @@ def premise_activity_mix_to_database_table(
             ``general_range``, following :func:`shrecc.database.filt_cutoff`.
         freq: Pandas frequency used to generate timestamps within
             ``general_range`` when ``refined_range`` is supplied.
+        inventory_resolution: Whether columns represent annual or monthly
+            inventories.
+        preserve_time: Keep hourly timestamps instead of applying annual
+            aggregation. Intended for in-memory assessment inputs.
         product: Product label used in the output MultiIndex.
         unit: Unit label used in the output MultiIndex.
 
@@ -438,6 +448,7 @@ def premise_activity_mix_to_database_table(
             + ", ".join(sorted(missing_dims))
         )
 
+    resolution = validate_inventory_resolution(inventory_resolution)
     mix = premise_activity_mix_xr
     if countries is not None:
         mix = mix.sel(consumer_country=list(countries))
@@ -450,7 +461,7 @@ def premise_activity_mix_to_database_table(
         freq=freq,
     )
 
-    if "time" in mix.dims:
+    if "time" in mix.dims and resolution == "annual" and not preserve_time:
         mix = mix.mean("time")
 
     source_countries = mix["source_country"].to_index()
@@ -483,14 +494,27 @@ def premise_activity_mix_to_database_table(
     if table["geography"].isna().any():
         raise ValueError("Could not assign exchange geography to all rows")
 
-    table = (
-        table.groupby(
-            ["geography", "premise_activity", "consumer_country"],
-            dropna=False,
-        )["share"]
-        .sum()
-        .unstack("consumer_country", fill_value=0)
-    )
+    row_levels = ["geography", "premise_activity"]
+    if "time" in mix.dims:
+        table = (
+            table.groupby(
+                [*row_levels, "time", "consumer_country"],
+                dropna=False,
+            )["share"]
+            .sum()
+            .unstack(["time", "consumer_country"], fill_value=0)
+        )
+        table.columns.names = ["time", "country"]
+    else:
+        table = (
+            table.groupby(
+                [*row_levels, "consumer_country"],
+                dropna=False,
+            )["share"]
+            .sum()
+            .unstack("consumer_country", fill_value=0)
+        )
+        table.columns.name = None
 
     table.index = pd.MultiIndex.from_arrays(
         [
@@ -501,8 +525,6 @@ def premise_activity_mix_to_database_table(
         ],
         names=["geography", "activityName", "product", "unit"],
     )
-    table.columns.name = None
-
     return table
 
 

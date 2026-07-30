@@ -13,6 +13,7 @@ from shrecc.mapping import (
     map_consumption_mix_to_ecoinvent_activities,
     mapping_gap_to_report,
     validate_consumption_profile,
+    validate_inventory_resolution,
 )
 
 __all__ = (
@@ -25,4 +26,5 @@ __all__ = (
     "map_consumption_mix_to_ecoinvent_activities",
     "mapping_gap_to_report",
     "validate_consumption_profile",
+    "validate_inventory_resolution",
 )

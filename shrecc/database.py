@@ -25,6 +25,7 @@ from shrecc.mapping import (
     activity_mix_to_database_table,
     load_ecoinvent_mapping as load_mapping_data,
     map_consumption_mix_to_ecoinvent_activities,
+    validate_inventory_resolution,
 )
 from shrecc.result_store import (
     MANIFEST_FILENAME,
@@ -359,6 +360,71 @@ def get_network_activities(eidb_name):
     return network_act
 
 
+def get_country_network_activities(eidb_name, country):
+    """Return the fixed network exchanges included for one consumer country."""
+    specific_network = {
+        "land": (
+            "market for transmission network, electricity, high voltage "
+            "direct current land cable"
+        ),
+        "subsea": (
+            "market for transmission network, electricity, high voltage "
+            "direct current subsea cable"
+        ),
+        "construction": (
+            "transmission network construction, electricity, high voltage"
+        ),
+    }
+    land_cable_countries = {
+        "AT",
+        "BE",
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "IT",
+        "LT",
+        "LV",
+        "ME",
+        "MT",
+        "NO",
+        "SE",
+        "TR",
+        "UK",
+    }
+    subsea_cable_countries = {
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "IT",
+        "LT",
+        "ME",
+        "MT",
+        "NO",
+        "PL",
+        "UK",
+    }
+    selected = []
+    for exchange in get_network_activities(eidb_name):
+        name = exchange["name"]
+        if name not in specific_network.values():
+            selected.append(exchange)
+        elif name == specific_network["land"] and country in land_cable_countries:
+            selected.append(exchange)
+        elif name == specific_network["subsea"] and country in subsea_cable_countries:
+            selected.append(exchange)
+        elif name == specific_network["construction"] and country == "CH":
+            selected.append(exchange)
+    return selected
+
+
 def create_activity_dict(
     dataframe_filt,
     known_inputs,
@@ -367,6 +433,7 @@ def create_activity_dict(
     eidb_name=None,
     year=None,
     consumption_profile=None,
+    inventory_resolution=None,
 ):
     """
     Creates a dictionary of activities for the BW database based on the filtered dataframe and known inputs.
@@ -383,24 +450,30 @@ def create_activity_dict(
             name is left unchanged to avoid repeating it.
         consumption_profile (str, optional): Temporal weighting represented by
             the foreground inventory, stored as activity metadata.
+        inventory_resolution (str, optional): ``"annual"`` or ``"monthly"``.
+            When omitted, time-indexed columns are treated as monthly and
+            country-only columns as annual for compatibility.
 
     Returns:
         dict: A dictionary containing activities to be written to the BW2 database.
     """
     activities = {}
     activity_year = int(year) if year is not None else None
+    resolution = (
+        validate_inventory_resolution(inventory_resolution)
+        if inventory_resolution is not None
+        else ("monthly" if dataframe_filt.columns.nlevels > 1 else "annual")
+    )
     for i, col in enumerate(dataframe_filt.columns):
         if dataframe_filt.columns.nlevels > 1:
             time, country = col
-            activity = f"{time} Electricity mix"
-            name = f"{activity} in {country}"
-            name_contains_year = str(activity_year) in str(time)
+            period = _format_inventory_period(time, resolution)
         else:
             country = col
-            name = f"Electricity mix in {country}"
-            name_contains_year = False
-        if activity_year is not None and not name_contains_year:
-            name = f"{name}, {activity_year}"
+            period = str(activity_year) if activity_year is not None else None
+        name = f"Electricity mix in {country}"
+        if period is not None:
+            name = f"{name}, {period}"
         code = f"electricity {i}"
         bd_version = bd.__version__
         if not isinstance(bd_version, str):
@@ -419,6 +492,12 @@ def create_activity_dict(
             "location": str(country),
             "reference product": "Electricity mix",
             "type": act_type,
+            "inventory_resolution": resolution,
+            "comment": _inventory_comment(
+                resolution,
+                period,
+                consumption_profile,
+            ),
             "exchanges": [],
         }
         if activity_year is not None:
@@ -447,91 +526,16 @@ def create_activity_dict(
                         "type": "technosphere",
                     }
                     act["exchanges"].append(new_exchange)
-        network = get_network_activities(eidb_name or db_name)
-        specific_network = [
-            "market for transmission network, electricity, high voltage direct current land cable",
-            "market for transmission network, electricity, high voltage direct current subsea cable",
-            "transmission network construction, electricity, high voltage",
-        ]
-        land_cable = [
-            "FR",
-            "IT",
-            "GR",
-            "DK",
-            "AT",
-            "BE",
-            "EE",
-            "ES",
-            "FI",
-            "HR",
-            "IT",
-            "LT",
-            "LV",
-            "ME",
-            "MT",
-            "NO",
-            "SE",
-            "TR",
-            "UK",
-        ]
-        subsea_cable = [
-            "FR",
-            "IT",
-            "GR",
-            "DK",
-            "EE",
-            "ES",
-            "FI",
-            "HR",
-            "IT",
-            "LT",
-            "ME",
-            "MT",
-            "NO",
-            "PL",
-            "UK",
-        ]
-        for exch_net in network:
-            if exch_net["name"] not in specific_network:
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
+        for exch_net in get_country_network_activities(eidb_name or db_name, country):
+            exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
+            if exchange:
+                act["exchanges"].append(
+                    {
                         "input": exchange,
                         "amount": float(exch_net["val"]),
                         "type": "technosphere",
                     }
-                    act["exchanges"].append(new_exchange)
-            if (
-                country in land_cable and exch_net["name"] == specific_network[0]
-            ):  # writing the land cable
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
-            if (
-                country in subsea_cable and exch_net["name"] == specific_network[1]
-            ):  # writing the subsea cable
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
-            if country == "CH" and exch_net["name"] == specific_network[2]:
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
+                )
         activities[(db_name, code)] = act
     return activities
 
@@ -545,6 +549,7 @@ def create_database(
     strict=False,
     year=None,
     consumption_profile=None,
+    inventory_resolution=None,
 ):
     """
     Creates an "ecoinvent-like" BW database based on a previously filtered dataframe.
@@ -563,6 +568,8 @@ def create_database(
             and stored as activity metadata.
         consumption_profile (str, optional): Temporal weighting stored as
             foreground activity metadata.
+        inventory_resolution (str, optional): Temporal resolution stored in
+            activity names, metadata, and comments.
 
     Returns:
         None
@@ -585,6 +592,32 @@ def create_database(
         eidb_name=eidb_name,
         year=year,
         consumption_profile=consumption_profile,
+        inventory_resolution=inventory_resolution,
     )
     elec_db = setup_database(project_name, db_name)
     elec_db.write(activities)
+
+
+def _format_inventory_period(time, inventory_resolution):
+    """Format a table-column timestamp for an activity name."""
+    timestamp = pd.Timestamp(time)
+    if inventory_resolution == "monthly":
+        return timestamp.strftime("%Y-%m")
+    return str(timestamp.year)
+
+
+def _inventory_comment(
+    inventory_resolution,
+    period,
+    consumption_profile,
+):
+    """Build ActivityBrowser documentation for a foreground inventory."""
+    parts = [
+        "SHRECC electricity consumption mix.",
+        f"Inventory resolution: {inventory_resolution}.",
+    ]
+    if period is not None:
+        parts.append(f"Inventory period: {period}.")
+    if consumption_profile is not None:
+        parts.append(f"Consumption profile: {consumption_profile}.")
+    return " ".join(parts)
