@@ -76,7 +76,10 @@ def test_resolve_electricity_generation_shares_follows_wrappers():
 class FakeDatabaseResolver:
     def __init__(self):
         self.activities = {
-            "flat-db": FakeActivity(1, "Electricity mix in FR, 2040"),
+            "flat-db": FakeActivity(
+                1,
+                "electricity, consumption mix, 2040",
+            ),
             "background-db": FakeActivity(
                 2,
                 "market for electricity, low voltage",

@@ -36,6 +36,9 @@ from shrecc.result_store import (
 
 UNUSED_SOURCE = "Import balance (physical)"
 DEFAULT_ACTIVITY_FALLBACK_LOCATIONS = ("RER", "RoW", "GLO")
+FOREGROUND_ACTIVITY_NAME = "electricity, consumption mix"
+FOREGROUND_REFERENCE_PRODUCT = "electricity"
+FOREGROUND_UNIT = "kilowatt hour"
 
 
 @dataclass(frozen=True)
@@ -530,7 +533,7 @@ def create_activity_dict(
         else:
             country = col
             period = str(activity_year) if activity_year is not None else None
-        name = f"Electricity mix in {country}"
+        name = FOREGROUND_ACTIVITY_NAME
         if period is not None:
             name = f"{name}, {period}"
         code = f"electricity {i}"
@@ -546,10 +549,10 @@ def create_activity_dict(
             prod_exchange_type = bd.labels.production_edge_default
         act = {
             "name": name,
-            "unit": "kWh",
+            "unit": FOREGROUND_UNIT,
             "code": code,
             "location": str(country),
-            "reference product": "Electricity mix",
+            "reference product": FOREGROUND_REFERENCE_PRODUCT,
             "type": act_type,
             "inventory_resolution": resolution,
             "comment": _inventory_comment(
@@ -569,7 +572,7 @@ def create_activity_dict(
                 "input": (db_name, code),
                 "name": name,
                 "location": str(country),
-                "unit": "kWh",
+                "unit": FOREGROUND_UNIT,
                 "amount": 1,
                 "type": prod_exchange_type,
             }

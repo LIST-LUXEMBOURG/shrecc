@@ -1783,7 +1783,9 @@ def test_create_activity_dict_basic(
         act_type = bd.labels.process_node_default
         prod_exchange_type = bd.labels.production_edge_default
     for act in activities.values():
-        assert act["unit"] == "kWh"
+        assert act["name"].startswith("electricity, consumption mix")
+        assert act["reference product"] == "electricity"
+        assert act["unit"] == "kilowatt hour"
         assert act["type"] == act_type
         assert isinstance(act["exchanges"], list)
         # Should have at least one exchange (the technology)
@@ -1793,6 +1795,11 @@ def test_create_activity_dict_basic(
             e["input"] in known_inputs_network_fixture.values()
             for e in act["exchanges"]
         )
+        production_exchange = next(
+            e for e in act["exchanges"] if e["type"] == prod_exchange_type
+        )
+        assert production_exchange["name"] == act["name"]
+        assert production_exchange["unit"] == "kilowatt hour"
 
     # Check that the correct technology exchange is present for each activity
     # act0 is for ("2023-06-01 08:00:00", "FR")
@@ -1884,7 +1891,9 @@ def test_create_activity_dict_adds_year_and_profile_to_metadata(
     )
 
     activity = activities[("test_db", "electricity 0")]
-    assert activity["name"] == "Electricity mix in FR, 2040"
+    assert activity["name"] == "electricity, consumption mix, 2040"
+    assert activity["reference product"] == "electricity"
+    assert activity["unit"] == "kilowatt hour"
     assert activity["year"] == 2040
     assert activity["consumption_profile"] == "national_demand"
     assert activity["inventory_resolution"] == "annual"
@@ -1902,8 +1911,8 @@ def test_create_activity_dict_names_and_documents_resolved_periods(
 ):
     resolution = "monthly"
     expected_names = [
-        "Electricity mix in FR, 2023-06",
-        "Electricity mix in DE, 2023-06",
+        "electricity, consumption mix, 2023-06",
+        "electricity, consumption mix, 2023-06",
     ]
     activities = create_activity_dict(
         sample_dataframe_filt,
@@ -1916,6 +1925,7 @@ def test_create_activity_dict_names_and_documents_resolved_periods(
     )
 
     assert [activity["name"] for activity in activities.values()] == expected_names
+    assert [activity["location"] for activity in activities.values()] == ["FR", "DE"]
     for activity in activities.values():
         assert activity["inventory_resolution"] == resolution
         assert f"Inventory resolution: {resolution}." in activity["comment"]

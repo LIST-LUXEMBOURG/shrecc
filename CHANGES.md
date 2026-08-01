@@ -22,6 +22,10 @@ SHRECC CHANGELOG
 
 ### Changed
 
+- Align generated foreground activities with Brightway and ecoinvent naming
+  conventions: lowercase activity names, country geography stored only in
+  `location`, the voltage-neutral reference product `electricity`, and the
+  unit `kilowatt hour`.
 - Limit written foreground inventory resolution to annual and monthly.
   Requesting hourly inventory writing now directs users to `NewDatabase.lcia()`.
 - Map temporal LCIA one consumer country at a time and cache unique background
