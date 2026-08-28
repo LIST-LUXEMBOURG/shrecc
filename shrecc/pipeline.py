@@ -36,6 +36,7 @@ from shrecc.lcia import (
     calculate_lcia,
     consumption_profile_weights,
     load_source_score_cache,
+    resolve_lcia_method_units,
     resolve_lcia_methods,
     write_source_score_cache,
 )
@@ -391,6 +392,7 @@ class NewDatabase:
 
         bd.projects.set_current(self.project_name)
         resolved_methods = resolve_lcia_methods(methods)
+        impact_category_units = resolve_lcia_method_units(resolved_methods)
         results_by_year = {}
         persistent_score_caches = {}
         for year in self.years:
@@ -458,6 +460,7 @@ class NewDatabase:
                 weights,
                 year=year,
                 engine=engine,
+                impact_category_units=impact_category_units,
             )
 
         for cache in persistent_score_caches.values():

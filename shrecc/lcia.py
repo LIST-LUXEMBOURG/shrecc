@@ -71,6 +71,21 @@ class LCIAResults:
         dataset = next(iter(self._results_by_year.values()))
         return tuple(map(str, dataset["impact_category"].values))
 
+    @property
+    def impact_category_units(self):
+        """Return impact-category labels mapped to Brightway method units."""
+        if not self._results_by_year:
+            return {}
+        dataset = next(iter(self._results_by_year.values()))
+        if "impact_category_unit" not in dataset.coords:
+            return {label: None for label in self.impact_categories}
+        return dict(
+            zip(
+                self.impact_categories,
+                dataset["impact_category_unit"].values.tolist(),
+            )
+        )
+
     def hourly(self, year=None):
         """Return hourly intensities, profile weights, and contributions.
 
@@ -290,6 +305,11 @@ def resolve_lcia_methods(methods=None):
     return resolved
 
 
+def resolve_lcia_method_units(methods):
+    """Return Brightway's declared unit for each resolved LCIA method."""
+    return tuple(bd.methods[method].get("unit") for method in methods)
+
+
 def build_resolved_inventory_basis(
     table,
     *,
@@ -440,8 +460,26 @@ def consumption_profile_weights(results, consumption_profile):
     )
 
 
-def build_lcia_dataset(intensity, consumption_weight, *, year, engine):
+def build_lcia_dataset(
+    intensity,
+    consumption_weight,
+    *,
+    year,
+    engine,
+    impact_category_units=None,
+):
     """Combine hourly intensities and profile weights in a labelled dataset."""
+    if impact_category_units is not None:
+        if len(impact_category_units) != intensity.sizes["impact_category"]:
+            raise ValueError(
+                "impact_category_units must match the impact-category dimension"
+            )
+        intensity = intensity.assign_coords(
+            impact_category_unit=(
+                "impact_category",
+                list(impact_category_units),
+            )
+        )
     consumption_weight = consumption_weight.sel(
         time=intensity["time"],
         consumer_country=intensity["consumer_country"],

@@ -137,8 +137,11 @@ assessment = electricity.lcia()
 assessment.hourly(2040)
 assessment.monthly()
 assessment.annual()
+assessment.impact_category_units
 ```
 
 The hourly result includes LCIA intensity per kWh, raw consumption-profile
 weights, and each hour's contribution to the profile-weighted annual
-intensity.
+intensity. Brightway method units are retained as the
+`impact_category_unit` xarray coordinate in hourly, monthly, and annual
+results, and as a label-to-unit mapping in `impact_category_units`.

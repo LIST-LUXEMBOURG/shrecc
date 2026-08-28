@@ -548,6 +548,10 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch, tmp_path
         "shrecc.pipeline.resolve_lcia_methods",
         MagicMock(return_value=(method,)),
     )
+    monkeypatch.setattr(
+        "shrecc.pipeline.resolve_lcia_method_units",
+        MagicMock(return_value=("kg CO2-Eq",)),
+    )
     build_basis = MagicMock(return_value=basis)
     monkeypatch.setattr(
         "shrecc.pipeline.build_resolved_inventory_basis",
@@ -577,6 +581,9 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch, tmp_path
     lcia_results = database.lcia()
 
     assert database.lcia_results is lcia_results
+    assert database.lcia_results.impact_category_units == {
+        "climate": "kg CO2-Eq"
+    }
     assert lcia_results.annual().sel(
         year=year,
         consumer_country="FR",

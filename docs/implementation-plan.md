@@ -43,7 +43,8 @@ this separation and should not add public arguments unless necessary.
 - `LCIAResults.hourly(year)` returns `intensity`, `consumption_weight`, and
   `weighted_contribution`. `monthly()` and `annual()` return profile-weighted
   intensities. `impact_categories` exposes labels suitable for xarray
-  selection.
+  selection, while `impact_category_units` and the `impact_category_unit`
+  coordinate retain units declared by the corresponding Brightway methods.
 
 ## Mapping decisions
 
@@ -98,6 +99,8 @@ this separation and should not add public arguments unless necessary.
 7. `docs: simplify the beginner notebook to the annual default` - remove the
    explicit time and resolution arguments, retain the full year's hourly
    results, and write the default annual inventories.
+8. `feat: retain LCIA impact-category units` - recover units from Brightway
+   method metadata and keep them attached to all temporal LCIA results.
 
 Focused LCIA and pipeline verification after the cache change: 39 tests passed.
 The preceding issue-48 affected suite passed 133 tests, and its GitLab pipeline

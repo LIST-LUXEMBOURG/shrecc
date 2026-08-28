@@ -14,6 +14,7 @@ from shrecc.lcia import (
     calculate_lcia,
     consumption_profile_weights,
     load_source_score_cache,
+    resolve_lcia_method_units,
     resolve_lcia_methods,
     write_source_score_cache,
 )
@@ -91,6 +92,19 @@ def test_default_methods_raise_when_ef_is_missing(monkeypatch):
 
     with pytest.raises(ValueError, match="No EF v3.1"):
         resolve_lcia_methods()
+
+
+def test_method_units_come_from_brightway_metadata(monkeypatch):
+    metadata = {
+        METHODS[0]: {"unit": "kg CO2-Eq"},
+        METHODS[1]: {"unit": "m3 world-Eq deprived"},
+    }
+    monkeypatch.setattr(lcia, "bd", SimpleNamespace(methods=metadata))
+
+    assert resolve_lcia_method_units(METHODS) == (
+        "kg CO2-Eq",
+        "m3 world-Eq deprived",
+    )
 
 
 def test_source_score_cache_round_trip(monkeypatch, tmp_path):
@@ -284,26 +298,33 @@ def test_lcia_results_aggregate_profile_weighted_intensity():
         weights,
         year=2040,
         engine="linear",
+        impact_category_units=("kg CO2-Eq",),
     )
     result = LCIAResults({2040: dataset}, METHODS[:1], "linear")
 
     assert result.years == (2040,)
     assert result.impact_categories == ("climate",)
+    assert result.impact_category_units == {"climate": "kg CO2-Eq"}
     assert repr(result) == (
         "LCIAResults(years=[2040], impact_categories=1, engine='linear')"
     )
     hourly = result.hourly()
+    assert hourly["impact_category_unit"].item() == "kg CO2-Eq"
     assert "consuming one kilowatt hour" in hourly["intensity"].attrs["description"]
     assert "Unnormalized" in hourly["consumption_weight"].attrs["description"]
     assert "annual intensity" in hourly["weighted_contribution"].attrs[
         "description"
     ]
-    assert result.annual().sel(
+    annual = result.annual()
+    monthly = result.monthly()
+    assert annual["impact_category_unit"].item() == "kg CO2-Eq"
+    assert monthly["impact_category_unit"].item() == "kg CO2-Eq"
+    assert annual.sel(
         year=2040,
         consumer_country="FR",
         impact_category="climate",
     ).item() == pytest.approx(17.5)
-    assert result.monthly().sel(
+    assert monthly.sel(
         year=2040,
         consumer_country="FR",
         impact_category="climate",

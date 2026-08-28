@@ -19,6 +19,8 @@ SHRECC CHANGELOG
 - Default temporal LCIA to all installed methods in the exact `EF v3.1`
   Brightway method family.
 - Add `LCIAResults` with hourly, annual, and monthly profile-weighted accessors.
+- Retain Brightway LCIA method units as an xarray coordinate and expose them
+  through `LCIAResults.impact_category_units`.
 - Cache locally generated background-activity LCIA scores across SHRECC runs,
   keyed by Brightway project, background state, and characterization methods.
   These ecoinvent-derived cache files remain local and are never distributed
