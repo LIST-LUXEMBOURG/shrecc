@@ -9,7 +9,11 @@ import bw2data as bd
 import pandas as pd
 import xarray as xr
 
-from shrecc.database import apply_cutoff, create_database
+from shrecc.database import (
+    apply_cutoff,
+    build_background_activity_index,
+    create_database,
+)
 from shrecc.energy_charts import (
     # Aliases distinguish orchestration dependencies from their implementations.
     data_processing as process_energy_charts_data,
@@ -393,6 +397,9 @@ class NewDatabase:
                 )
             country_intensities = []
             source_score_cache = {}
+            background_index = build_background_activity_index(
+                self.background_databases[year]
+            )
             for country in self.countries:
                 hourly_table = self._hourly_database_table(
                     year,
@@ -404,6 +411,7 @@ class NewDatabase:
                     background_database=self.background_databases[year],
                     include_network=self.network,
                     strict=self.strict,
+                    background_index=background_index,
                 )
                 country_intensities.append(
                     calculate_lcia(

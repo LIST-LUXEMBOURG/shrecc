@@ -5,8 +5,8 @@ import numpy as np
 from packaging.version import parse as vparse
 from pytest import approx
 from unittest.mock import patch, MagicMock
-import types
 from shrecc.database import (
+    BackgroundActivityIndex,
     filt_cutoff,
     load_mapping_data,
     load_time_series_data,
@@ -18,6 +18,7 @@ from shrecc.database import (
     filter_by_range,
     apply_cutoff,
     setup_database,
+    build_background_activity_index,
     map_known_inputs,
     get_network_activities,
     create_activity_dict,
@@ -1473,66 +1474,25 @@ def sample_dataframe():
     return pd.DataFrame([[1, 2], [3, 4], [5, 6]], index=idx, columns=["A", "B"])
 
 
+def _background_index(
+    *,
+    database_name="eidb",
+    activities=None,
+    network=None,
+):
+    return BackgroundActivityIndex(
+        database_name=database_name,
+        by_name_location_unit=activities or {},
+        by_name_location=network or {},
+    )
+
+
 @patch("shrecc.database.get_network_activities")
-@patch("shrecc.database.Filter")
-@patch("shrecc.database.Query")
-@patch("shrecc.database.bd.Database")
 def test_map_known_inputs_basic(
-    mock_database_cls,
-    mock_query_cls,
-    mock_filter_cls,
     mock_get_network,
     sample_dataframe,
     capsys,
 ):
-    # Mock bd.Database().load()
-    mock_db_instance = MagicMock()
-    mock_db_instance.load.return_value = object()  # mock ei_db_data
-    mock_database_cls.return_value = mock_db_instance
-
-    # Prepare results map
-    results_map = {
-        ("FR", "Hydro"): ["fr_hydro_result"],
-        ("GB", "Wind"): ["gb_wind_result"],
-    }
-
-    # Setup the fake Query behavior
-    def fake_query_factory():
-        class Q:
-            def __init__(self):
-                self.filters = []
-
-            def add(self, f):
-                self.filters.append(f)
-
-            def __call__(self, data):
-                name, loc = None, None
-                for f in self.filters:
-                    if hasattr(f, "field") and f.field == "name":
-                        name = f.value
-                    if hasattr(f, "field") and f.field == "location":
-                        loc = f.value
-                if name and loc:
-                    if name.startswith("market for") or name.startswith(
-                        "transmission network"
-                    ):
-                        return ["network_result"]
-                    return results_map.get((loc, name), [])
-                return []
-
-        return Q()
-
-    mock_query_cls.side_effect = fake_query_factory
-
-    # Fake Filter class
-    class DummyFilter:
-        def __init__(self, field, op, value):
-            self.field = field
-            self.value = value
-
-    mock_filter_cls.side_effect = DummyFilter
-
-    # Mock get_network_activities
     mock_get_network.return_value = [
         {
             "name": "market for distribution network, electricity, low voltage",
@@ -1546,8 +1506,28 @@ def test_map_known_inputs_basic(
         },
     ]
 
-    # Run the function
-    known_inputs, known_inputs_network = map_known_inputs("eidb", sample_dataframe)
+    background_index = _background_index(
+        activities={
+            ("Hydro", "FR", "kilowatt hour"): ("fr_hydro_result",),
+            ("Wind", "GB", "kilowatt hour"): ("gb_wind_result",),
+        },
+        network={
+            (
+                "market for distribution network, electricity, low voltage",
+                "GLO",
+            ): ("network_result",),
+            (
+                "transmission network construction, electricity, high voltage",
+                "CH",
+            ): ("network_result",),
+        },
+    )
+
+    known_inputs, known_inputs_network = map_known_inputs(
+        "eidb",
+        sample_dataframe,
+        background_index=background_index,
+    )
 
     # Assert known inputs
     assert ("FR", "Hydro", "kWh") in known_inputs
@@ -1582,37 +1562,16 @@ def test_map_known_inputs_basic(
 
 
 @patch("shrecc.database.get_network_activities", return_value=[])
-@patch("shrecc.database.Filter")
-@patch("shrecc.database.Query")
-@patch("shrecc.database.bd.Database")
-def test_map_known_inputs_empty_dataframe(
-    mock_database_cls, mock_query_cls, mock_filter_cls, mock_get_network_activities
-):
+def test_map_known_inputs_empty_dataframe(mock_get_network_activities):
     # Create empty DataFrame with MultiIndex
     idx = pd.MultiIndex.from_tuples([], names=["loc", "name", "prod", "unit"])
     df = pd.DataFrame([], index=idx, columns=["A"])
 
-    # Set up mock Database and .load()
-    mock_db_instance = mock_database_cls.return_value
-    mock_db_instance.load.return_value = object()
-
-    # Set up mock Query instance
-    mock_query_instance = mock_query_cls.return_value
-    mock_query_instance.filters = []
-    mock_query_instance.add.side_effect = lambda f: mock_query_instance.filters.append(
-        f
+    known_inputs, known_inputs_network = map_known_inputs(
+        "eidb",
+        df,
+        background_index=_background_index(),
     )
-    mock_query_instance.side_effect = lambda data: []
-
-    # Set up mock Filter (not actually used in this test since DataFrame is empty)
-    mock_filter_cls.side_effect = lambda field, op, value: types.SimpleNamespace(
-        field=field, value=value
-    )
-
-    mock_get_network_activities.return_value = []
-
-    # Call the function under test
-    known_inputs, known_inputs_network = map_known_inputs("eidb", df)
 
     # Assertions
     assert known_inputs == {}
@@ -1620,13 +1579,7 @@ def test_map_known_inputs_empty_dataframe(
 
 
 @patch("shrecc.database.get_network_activities", return_value=[])
-@patch("shrecc.database.Filter")
-@patch("shrecc.database.Query")
-@patch("shrecc.database.bd.Database")
 def test_map_known_inputs_uses_same_activity_at_fallback_location(
-    mock_database_cls,
-    mock_query_cls,
-    mock_filter_cls,
     mock_get_network_activities,
     capsys,
 ):
@@ -1635,40 +1588,19 @@ def test_map_known_inputs_uses_same_activity_at_fallback_location(
         [("ESC", activity, "electricity, high voltage", "kWh")]
     )
     dataframe = pd.DataFrame({"IT": [0.2]}, index=index)
-    mock_database_cls.return_value.load.return_value = object()
-
-    class DummyFilter:
-        def __init__(self, field, op, value):
-            self.field = field
-            self.value = value
-
-    mock_filter_cls.side_effect = DummyFilter
-
-    def fake_query_factory():
-        class Q:
-            def __init__(self):
-                self.filters = []
-
-            def add(self, item):
-                self.filters.append(item)
-
-            def __call__(self, data):
-                location = next(
-                    item.value for item in self.filters if item.field == "location"
-                )
-                if location == "RoW":
-                    return ["offshore-row-exchange"]
-                return []
-
-        return Q()
-
-    mock_query_cls.side_effect = fake_query_factory
-
     known_inputs, _ = map_known_inputs(
         "premise-db",
         dataframe,
         strict=True,
         include_network=False,
+        background_index=_background_index(
+            database_name="premise-db",
+            activities={
+                (activity, "RoW", "kilowatt hour"): (
+                    "offshore-row-exchange",
+                )
+            },
+        ),
     )
 
     assert known_inputs[("ESC", activity, "kWh")] == "offshore-row-exchange"
@@ -1678,13 +1610,7 @@ def test_map_known_inputs_uses_same_activity_at_fallback_location(
 
 
 @patch("shrecc.database.get_network_activities", return_value=[])
-@patch("shrecc.database.Filter")
-@patch("shrecc.database.Query")
-@patch("shrecc.database.bd.Database")
 def test_map_known_inputs_strict_raises_only_for_nonzero_rows(
-    mock_database_cls,
-    mock_query_cls,
-    mock_filter_cls,
     mock_get_network_activities,
 ):
     index = pd.MultiIndex.from_tuples(
@@ -1694,9 +1620,6 @@ def test_map_known_inputs_strict_raises_only_for_nonzero_rows(
         ]
     )
     dataframe = pd.DataFrame({"ES": [1.0, 0.0]}, index=index)
-    mock_database_cls.return_value.load.return_value = object()
-    mock_query_cls.return_value.return_value = []
-
     with pytest.raises(
         ValueError,
         match=r"Required activity, FR \(0 matches\)",
@@ -1706,10 +1629,33 @@ def test_map_known_inputs_strict_raises_only_for_nonzero_rows(
             dataframe,
             strict=True,
             include_network=False,
+            background_index=_background_index(database_name="premise-db"),
         )
 
     assert "Zero activity" not in str(exc.value)
     mock_get_network_activities.assert_not_called()
+
+
+@patch("shrecc.database.bd.Database")
+def test_build_background_activity_index(mock_database):
+    mock_database.return_value.nodes_to_dataframe.return_value = pd.DataFrame(
+        [
+            ("eidb", "wind", "Wind", "FR", "kilowatt hour"),
+            ("eidb", "network", "Network", "GLO", "kilometer"),
+        ],
+        columns=["database", "code", "name", "location", "unit"],
+    )
+
+    index = build_background_activity_index("eidb")
+
+    assert index.database_name == "eidb"
+    assert index.by_name_location_unit[
+        ("Wind", "FR", "kilowatt hour")
+    ] == (("eidb", "wind"),)
+    assert index.by_name_location[("Network", "GLO")] == (
+        ("eidb", "network"),
+    )
+    mock_database.return_value.load.assert_not_called()
 
 
 # ────────────────────────────────────────────────────────────────
@@ -1837,7 +1783,9 @@ def test_create_activity_dict_basic(
         act_type = bd.labels.process_node_default
         prod_exchange_type = bd.labels.production_edge_default
     for act in activities.values():
-        assert act["unit"] == "kWh"
+        assert act["name"].startswith("electricity, consumption mix")
+        assert act["reference product"] == "electricity"
+        assert act["unit"] == "kilowatt hour"
         assert act["type"] == act_type
         assert isinstance(act["exchanges"], list)
         # Should have at least one exchange (the technology)
@@ -1847,6 +1795,11 @@ def test_create_activity_dict_basic(
             e["input"] in known_inputs_network_fixture.values()
             for e in act["exchanges"]
         )
+        production_exchange = next(
+            e for e in act["exchanges"] if e["type"] == prod_exchange_type
+        )
+        assert production_exchange["name"] == act["name"]
+        assert production_exchange["unit"] == "kilowatt hour"
 
     # Check that the correct technology exchange is present for each activity
     # act0 is for ("2023-06-01 08:00:00", "FR")
@@ -1938,7 +1891,9 @@ def test_create_activity_dict_adds_year_and_profile_to_metadata(
     )
 
     activity = activities[("test_db", "electricity 0")]
-    assert activity["name"] == "Electricity mix in FR, 2040"
+    assert activity["name"] == "electricity, consumption mix, 2040"
+    assert activity["reference product"] == "electricity"
+    assert activity["unit"] == "kilowatt hour"
     assert activity["year"] == 2040
     assert activity["consumption_profile"] == "national_demand"
     assert activity["inventory_resolution"] == "annual"
@@ -1956,8 +1911,8 @@ def test_create_activity_dict_names_and_documents_resolved_periods(
 ):
     resolution = "monthly"
     expected_names = [
-        "Electricity mix in FR, 2023-06",
-        "Electricity mix in DE, 2023-06",
+        "electricity, consumption mix, 2023-06",
+        "electricity, consumption mix, 2023-06",
     ]
     activities = create_activity_dict(
         sample_dataframe_filt,
@@ -1970,6 +1925,7 @@ def test_create_activity_dict_names_and_documents_resolved_periods(
     )
 
     assert [activity["name"] for activity in activities.values()] == expected_names
+    assert [activity["location"] for activity in activities.values()] == ["FR", "DE"]
     for activity in activities.values():
         assert activity["inventory_resolution"] == resolution
         assert f"Inventory resolution: {resolution}." in activity["comment"]

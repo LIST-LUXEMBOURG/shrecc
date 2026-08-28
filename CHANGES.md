@@ -22,6 +22,10 @@ SHRECC CHANGELOG
 
 ### Changed
 
+- Align generated foreground activities with Brightway and ecoinvent naming
+  conventions: lowercase activity names, country geography stored only in
+  `location`, the voltage-neutral reference product `electricity`, and the
+  unit `kilowatt hour`.
 - Limit written foreground inventory resolution to annual and monthly.
   Requesting hourly inventory writing now directs users to `NewDatabase.lcia()`.
 - Map temporal LCIA one consumer country at a time and cache unique background
@@ -30,6 +34,10 @@ SHRECC CHANGELOG
   temporal LCIA.
 - Default an omitted `time_range` and `times` selection to the complete first
   configured year, rebased to each year in a multi-year run.
+- Index each Brightway background database once per LCIA year instead of
+  repeatedly scanning every background activity for every mapped exchange.
+- Build mapped activity tables directly from labelled arrays instead of
+  expanding hourly values into long pandas tables and pivoting them back.
 
 ## 0.1.0.dev3
 

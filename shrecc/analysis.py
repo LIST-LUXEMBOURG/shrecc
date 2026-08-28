@@ -176,7 +176,8 @@ def compare_electricity_generation_mixes(
     Args:
         foreground_databases: Mapping from display label to ``{year:
             database_name}`` mappings. Foreground databases are expected to
-            contain activities named ``"Electricity mix in {country}, {year}"``.
+            contain activities named
+            ``"electricity, consumption mix, {year}"``.
         background_databases: Mapping from year to ecoinvent or premise
             background database name.
         countries: Consumer-country codes to compare.
@@ -396,7 +397,7 @@ def _comparison_roots(
     roots = {
         label: resolver.find_unique(
             databases[year],
-            f"Electricity mix in {country}, {year}",
+            f"electricity, consumption mix, {year}",
             country,
         )
         for label, databases in foreground_databases.items()

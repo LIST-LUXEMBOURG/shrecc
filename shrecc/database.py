@@ -2,6 +2,8 @@
 # Licensed under the MIT License (see LICENSE file for details).
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from packaging.version import parse as vparse
@@ -10,7 +12,6 @@ import re
 
 import bw2data as bd
 import pandas as pd
-from bw2data.query import Filter, Query
 
 from shrecc._legacy_database import (
     apply_mapping,
@@ -35,6 +36,65 @@ from shrecc.result_store import (
 
 UNUSED_SOURCE = "Import balance (physical)"
 DEFAULT_ACTIVITY_FALLBACK_LOCATIONS = ("RER", "RoW", "GLO")
+FOREGROUND_ACTIVITY_NAME = "electricity, consumption mix"
+FOREGROUND_REFERENCE_PRODUCT = "electricity"
+FOREGROUND_UNIT = "kilowatt hour"
+
+
+@dataclass(frozen=True)
+class BackgroundActivityIndex:
+    """Indexed Brightway activity keys for one background database."""
+
+    database_name: str
+    by_name_location_unit: dict
+    by_name_location: dict
+
+
+def build_background_activity_index(eidb_name):
+    """Load and index one Brightway background database for fast matching."""
+    database = bd.Database(eidb_name)
+    by_name_location_unit = defaultdict(list)
+    by_name_location = defaultdict(list)
+    if hasattr(database, "nodes_to_dataframe"):
+        nodes = database.nodes_to_dataframe(
+            columns=["database", "code", "name", "location", "unit"],
+            return_sorted=False,
+        )
+        records = (
+            (
+                (row.database, row.code),
+                row.name,
+                row.location,
+                row.unit,
+            )
+            for row in nodes.itertuples(index=False)
+        )
+    else:
+        records = (
+            (
+                key,
+                activity.get("name"),
+                activity.get("location"),
+                activity.get("unit"),
+            )
+            for key, activity in database.load().items()
+        )
+
+    for key, name, location, unit in records:
+        if name is None or location is None:
+            continue
+        by_name_location[(name, location)].append(key)
+        if unit is not None:
+            by_name_location_unit[(name, location, unit)].append(key)
+    return BackgroundActivityIndex(
+        database_name=eidb_name,
+        by_name_location_unit={
+            key: tuple(values) for key, values in by_name_location_unit.items()
+        },
+        by_name_location={
+            key: tuple(values) for key, values in by_name_location.items()
+        },
+    )
 
 
 def filt_cutoff(
@@ -200,6 +260,7 @@ def map_known_inputs(
     strict=False,
     include_network=True,
     fallback_locations=DEFAULT_ACTIVITY_FALLBACK_LOCATIONS,
+    background_index=None,
 ):
     """
     Maps known inputs from the ecoinvent database to the filtered dataframe.
@@ -211,12 +272,19 @@ def map_known_inputs(
         include_network (bool): Also resolve the fixed electricity-network inputs.
         fallback_locations: Ordered fallback geographies tried when the requested
             activity name and unit do not exist at the requested geography.
+        background_index: Optional prebuilt index for ``eidb_name``. Reuse this
+            when resolving several tables against the same background database.
 
     Returns:
         dict: A dictionary mapping known inputs to their corresponding entries in the ecoinvent database.
     """
-    ei_db = bd.Database(eidb_name)
-    ei_db_data = ei_db.load()
+    if background_index is None:
+        background_index = build_background_activity_index(eidb_name)
+    if background_index.database_name != eidb_name:
+        raise ValueError(
+            "Background activity index belongs to "
+            f"{background_index.database_name!r}, not {eidb_name!r}"
+        )
     known_inputs = {}
     missing_inputs = []
     country_to_code = {
@@ -248,20 +316,19 @@ def map_known_inputs(
             for fallback_loc in fallback_locations or ()
             if fallback_loc != loc
         )
-        results = []
+        results = ()
         resolved_loc = loc
         for candidate_loc in candidate_locations:
-            q = Query()
-            q.add(Filter("name", "is", name))
-            q.add(Filter("location", "is", candidate_loc))
-            q.add(Filter("unit", "is", "kilowatt hour"))
-            results = q(ei_db_data)
+            results = background_index.by_name_location_unit.get(
+                (name, candidate_loc, "kilowatt hour"),
+                (),
+            )
             resolved_loc = candidate_loc
             if results:
                 break
 
         if len(results) == 1:
-            exchange = list(results).pop()
+            exchange = results[0]
             known_inputs[(original_loc, original_name, unit)] = exchange
             known_inputs[(loc, name, unit)] = exchange
             known_inputs[(resolved_loc, name, unit)] = exchange
@@ -279,14 +346,9 @@ def map_known_inputs(
     for act in network:
         loc = act["loc"]
         name = act["name"]
-        q = Query()
-        filter_name = Filter("name", "is", name)
-        filter_loc = Filter("location", "is", loc)
-        q.add(filter_name)
-        q.add(filter_loc)
-        results = q(ei_db_data)
+        results = background_index.by_name_location.get((name, loc), ())
         if len(results) == 1:
-            known_inputs_network[(loc, name)] = list(results).pop()
+            known_inputs_network[(loc, name)] = results[0]
         else:
             print("Couldnt find activity:" + name)
             missing_inputs.append((loc, name, len(results)))
@@ -471,7 +533,7 @@ def create_activity_dict(
         else:
             country = col
             period = str(activity_year) if activity_year is not None else None
-        name = f"Electricity mix in {country}"
+        name = FOREGROUND_ACTIVITY_NAME
         if period is not None:
             name = f"{name}, {period}"
         code = f"electricity {i}"
@@ -487,10 +549,10 @@ def create_activity_dict(
             prod_exchange_type = bd.labels.production_edge_default
         act = {
             "name": name,
-            "unit": "kWh",
+            "unit": FOREGROUND_UNIT,
             "code": code,
             "location": str(country),
-            "reference product": "Electricity mix",
+            "reference product": FOREGROUND_REFERENCE_PRODUCT,
             "type": act_type,
             "inventory_resolution": resolution,
             "comment": _inventory_comment(
@@ -510,7 +572,7 @@ def create_activity_dict(
                 "input": (db_name, code),
                 "name": name,
                 "location": str(country),
-                "unit": "kWh",
+                "unit": FOREGROUND_UNIT,
                 "amount": 1,
                 "type": prod_exchange_type,
             }
