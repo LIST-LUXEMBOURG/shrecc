@@ -33,7 +33,15 @@ class ResolvedInventoryBasis:
 
 
 class LCIAResults:
-    """Labelled hourly and temporally aggregated LCIA results."""
+    """Hourly electricity impacts and their profile-weighted aggregates.
+
+    ``hourly(year)`` returns an xarray Dataset with three labelled variables:
+    ``intensity`` is the impact of consuming one kilowatt hour in each country
+    and hour, ``consumption_weight`` contains the unnormalized temporal
+    profile, and ``weighted_contribution`` is each hour's contribution to the
+    annual result. ``monthly()`` and ``annual()`` return the corresponding
+    profile-weighted intensities without recalculating Brightway.
+    """
 
     def __init__(self, results_by_year, methods, engine):
         self._results_by_year = dict(results_by_year)
@@ -45,8 +53,21 @@ class LCIAResults:
         """Return modeled years in calculation order."""
         return tuple(self._results_by_year)
 
+    @property
+    def impact_categories(self):
+        """Return the selectable impact-category labels used by xarray."""
+        if not self._results_by_year:
+            return ()
+        dataset = next(iter(self._results_by_year.values()))
+        return tuple(map(str, dataset["impact_category"].values))
+
     def hourly(self, year=None):
-        """Return hourly LCIA intensities and profile weights for one year."""
+        """Return hourly intensities, profile weights, and contributions.
+
+        Select one time series with, for example,
+        ``result["intensity"].sel(consumer_country="PT",
+        impact_category=assessment.impact_categories[0])``.
+        """
         return self._resolve_year(year).copy()
 
     def annual(self):
@@ -79,6 +100,13 @@ class LCIAResults:
                 )
             rows.append(xr.concat(monthly, dim="time").expand_dims(year=[year]))
         return xr.concat(rows, dim="year").rename("weighted_intensity")
+
+    def __repr__(self):
+        return (
+            f"LCIAResults(years={list(self.years)!r}, "
+            f"impact_categories={len(self.impact_categories)}, "
+            f"engine={self.engine!r})"
+        )
 
     def _resolve_year(self, year):
         if year is None:
@@ -288,6 +316,28 @@ def build_lcia_dataset(intensity, consumption_weight, *, year, engine):
     normalized_weight = consumption_weight / consumption_weight.sum("time")
     weighted_contribution = (intensity * normalized_weight).rename(
         "weighted_contribution"
+    )
+    intensity = intensity.copy()
+    intensity.attrs.update(
+        {
+            "description": (
+                "Impact intensity of consuming one kilowatt hour in the "
+                "consumer country at this hour"
+            ),
+            "functional_unit": "1 kilowatt hour",
+        }
+    )
+    consumption_weight = consumption_weight.copy()
+    consumption_weight.attrs["description"] = (
+        "Unnormalized temporal weights supplied by the consumption profile"
+    )
+    weighted_contribution.attrs.update(
+        {
+            "description": (
+                "Hourly contribution to the profile-weighted annual intensity"
+            ),
+            "functional_unit": "1 kilowatt hour",
+        }
     )
     return xr.Dataset(
         {

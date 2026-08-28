@@ -226,6 +226,17 @@ def test_lcia_results_aggregate_profile_weighted_intensity():
     )
     result = LCIAResults({2040: dataset}, METHODS[:1], "linear")
 
+    assert result.years == (2040,)
+    assert result.impact_categories == ("climate",)
+    assert repr(result) == (
+        "LCIAResults(years=[2040], impact_categories=1, engine='linear')"
+    )
+    hourly = result.hourly()
+    assert "consuming one kilowatt hour" in hourly["intensity"].attrs["description"]
+    assert "Unnormalized" in hourly["consumption_weight"].attrs["description"]
+    assert "annual intensity" in hourly["weighted_contribution"].attrs[
+        "description"
+    ]
     assert result.annual().sel(
         year=2040,
         consumer_country="FR",
