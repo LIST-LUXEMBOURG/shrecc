@@ -1,6 +1,11 @@
 """Temporal LCIA calculations for mapped SHRECC electricity mixes."""
 
 from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+import warnings
 
 import bw2data as bd
 import numpy as np
@@ -11,6 +16,11 @@ from shrecc.database import get_country_network_activities, map_known_inputs
 
 DEFAULT_LCIA_METHOD_FAMILY = "EF v3.1"
 VALID_LCIA_ENGINES = {"linear", "multilca"}
+SOURCE_SCORE_CACHE_FORMAT = "shrecc-lcia-source-scores"
+SOURCE_SCORE_CACHE_VERSION = 1
+SOURCE_SCORE_CACHE_DIRNAME = (
+    f"lcia_source_scores_v{SOURCE_SCORE_CACHE_VERSION}"
+)
 
 
 @dataclass(frozen=True)
@@ -117,6 +127,129 @@ class LCIAResults:
             return self._results_by_year[int(year)]
         except KeyError as exc:
             raise ValueError(f"No LCIA results available for {year}") from exc
+
+
+def load_source_score_cache(data_root, background_database, methods):
+    """Load locally generated activity LCIA scores for one background state.
+
+    The fingerprint includes the current Brightway project, background and
+    dependency metadata, and the complete characterization methods. Cache
+    files contain ecoinvent-derived results and must remain local.
+
+    Returns:
+        A ``(path, scores)`` tuple. ``scores`` maps Brightway
+        ``(database, code)`` keys to arrays ordered like ``methods``.
+    """
+    path = _source_score_cache_path(data_root, background_database, methods)
+    if not path.is_file():
+        return path, {}
+
+    try:
+        with np.load(path, allow_pickle=False) as stored:
+            databases = stored["database"].astype(str)
+            codes = stored["code"].astype(str)
+            values = stored["scores"].astype(float)
+        if values.shape != (len(databases), len(methods)):
+            raise ValueError("cached source-score dimensions are inconsistent")
+        return path, {
+            (database, code): values[position]
+            for position, (database, code) in enumerate(zip(databases, codes))
+        }
+    except (OSError, KeyError, ValueError) as exc:
+        warnings.warn(
+            f"Ignoring unreadable SHRECC LCIA source-score cache {path}: {exc}",
+            stacklevel=2,
+        )
+        return path, {}
+
+
+def write_source_score_cache(path, scores, methods):
+    """Atomically persist locally generated activity LCIA scores."""
+    if not scores:
+        return
+
+    keys = sorted(scores)
+    values = np.vstack([np.asarray(scores[key], dtype=float) for key in keys])
+    if values.shape != (len(keys), len(methods)):
+        raise ValueError("source scores do not match the requested LCIA methods")
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            np.savez_compressed(
+                handle,
+                database=np.asarray([key[0] for key in keys]),
+                code=np.asarray([key[1] for key in keys]),
+                scores=values,
+            )
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _source_score_cache_path(data_root, background_database, methods):
+    fingerprint = _source_score_cache_fingerprint(background_database, methods)
+    return Path(data_root) / SOURCE_SCORE_CACHE_DIRNAME / f"{fingerprint}.npz"
+
+
+def _source_score_cache_fingerprint(background_database, methods):
+    payload = {
+        "format": SOURCE_SCORE_CACHE_FORMAT,
+        "version": SOURCE_SCORE_CACHE_VERSION,
+        "project": str(bd.projects.current),
+        "databases": _background_database_state(background_database),
+        "methods": [
+            {
+                "name": tuple(method),
+                "metadata": dict(bd.Method(method).metadata),
+                "characterization_factors": bd.Method(method).load(),
+            }
+            for method in methods
+        ],
+    }
+    serialized = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_cache_json_default,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _background_database_state(background_database):
+    pending = [background_database]
+    states = {}
+    while pending:
+        database_name = pending.pop()
+        if database_name in states:
+            continue
+        metadata = dict(bd.databases[database_name])
+        states[database_name] = metadata
+        pending.extend(
+            dependency
+            for dependency in metadata.get("depends", ())
+            if dependency not in states
+        )
+    return states
+
+
+def _cache_json_default(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (set, frozenset)):
+        return sorted(value)
+    if isinstance(value, Path):
+        return str(value)
+    return repr(value)
 
 
 def resolve_lcia_methods(methods=None):

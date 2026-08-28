@@ -35,7 +35,9 @@ from shrecc.lcia import (
     build_resolved_inventory_basis,
     calculate_lcia,
     consumption_profile_weights,
+    load_source_score_cache,
     resolve_lcia_methods,
+    write_source_score_cache,
 )
 from shrecc.premise_mapping import (
     PremiseConsumptionMixMapper,
@@ -390,15 +392,36 @@ class NewDatabase:
         bd.projects.set_current(self.project_name)
         resolved_methods = resolve_lcia_methods(methods)
         results_by_year = {}
+        persistent_score_caches = {}
         for year in self.years:
             if self.verbose:
                 print(
                     f"Calculating hourly LCIA for {year} with the {engine} engine"
                 )
             country_intensities = []
-            source_score_cache = {}
+            background_database = self.background_databases[year]
+            source_score_cache = None
+            if str(engine).lower() == "linear":
+                cache_key = (background_database, resolved_methods)
+                if cache_key not in persistent_score_caches:
+                    cache_path, cached_scores = load_source_score_cache(
+                        self._data_root(),
+                        background_database,
+                        resolved_methods,
+                    )
+                    persistent_score_caches[cache_key] = {
+                        "path": cache_path,
+                        "scores": cached_scores,
+                        "initial_size": len(cached_scores),
+                    }
+                    if self.verbose and cached_scores:
+                        print(
+                            f"Loaded {len(cached_scores)} local background "
+                            f"LCIA scores for {background_database}"
+                        )
+                source_score_cache = persistent_score_caches[cache_key]["scores"]
             background_index = build_background_activity_index(
-                self.background_databases[year]
+                background_database
             )
             for country in self.countries:
                 hourly_table = self._hourly_database_table(
@@ -408,7 +431,7 @@ class NewDatabase:
                 basis = build_resolved_inventory_basis(
                     hourly_table,
                     year=year,
-                    background_database=self.background_databases[year],
+                    background_database=background_database,
                     include_network=self.network,
                     strict=self.strict,
                     background_index=background_index,
@@ -436,6 +459,14 @@ class NewDatabase:
                 year=year,
                 engine=engine,
             )
+
+        for cache in persistent_score_caches.values():
+            if len(cache["scores"]) > cache["initial_size"]:
+                write_source_score_cache(
+                    cache["path"],
+                    cache["scores"],
+                    resolved_methods,
+                )
 
         self.lcia_results = LCIAResults(
             results_by_year,

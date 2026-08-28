@@ -503,7 +503,7 @@ def test_create_can_release_hourly_results_after_aggregation(monkeypatch):
         database.results()
 
 
-def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
+def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch, tmp_path):
     year = 2025
     results = _canonical_results(year)
     table = pd.DataFrame(
@@ -536,6 +536,7 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
         countries=["FR"],
         project_name="project",
         times=results["time"].to_index(),
+        data_dir=tmp_path,
     )
     database.consumption_results[year] = results
     monkeypatch.setattr(
@@ -552,8 +553,19 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
         "shrecc.pipeline.build_resolved_inventory_basis",
         build_basis,
     )
-    calculate = MagicMock(return_value=intensity)
+    source_score_cache = {}
+
+    def calculate_scores(*args, source_score_cache, **kwargs):
+        source_score_cache[("ecoinvent", "wind")] = np.array([10.0])
+        return intensity
+
+    calculate = MagicMock(side_effect=calculate_scores)
     monkeypatch.setattr("shrecc.pipeline.calculate_lcia", calculate)
+    cache_path = tmp_path / "source-scores.npz"
+    load_cache = MagicMock(return_value=(cache_path, source_score_cache))
+    write_cache = MagicMock()
+    monkeypatch.setattr("shrecc.pipeline.load_source_score_cache", load_cache)
+    monkeypatch.setattr("shrecc.pipeline.write_source_score_cache", write_cache)
     monkeypatch.setattr("shrecc.pipeline.bd.projects.set_current", MagicMock())
     background_index = object()
     build_background_index = MagicMock(return_value=background_index)
@@ -578,12 +590,17 @@ def test_lcia_uses_retained_hourly_results_without_writing(monkeypatch):
         strict=False,
         background_index=background_index,
     )
-    calculate.assert_called_once_with(
-        basis,
+    assert calculate.call_args.args == (basis, (method,))
+    assert calculate.call_args.kwargs == {
+        "engine": "linear",
+        "batch_size": 1000,
+        "source_score_cache": source_score_cache,
+    }
+    load_cache.assert_called_once_with(tmp_path, "ecoinvent", (method,))
+    write_cache.assert_called_once_with(
+        cache_path,
+        source_score_cache,
         (method,),
-        engine="linear",
-        batch_size=1000,
-        source_score_cache={},
     )
     build_background_index.assert_called_once_with("ecoinvent")
 

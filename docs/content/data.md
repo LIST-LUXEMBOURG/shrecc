@@ -124,6 +124,14 @@ source-score matrix by hourly coefficients. The optional `multilca` engine
 submits the same coefficients as composite functional units in bounded
 `FastScoresOnlyMultiLCA` batches.
 
+The linear engine keeps its compact background-activity scores in
+`lcia_source_scores_v1` below the configured SHRECC `data_dir` (or the default
+platform user-data directory). The cache is invalidated when the Brightway
+project, background database state, dependencies, or characterization methods
+change. It contains locally derived ecoinvent results: do not publish it.
+Deleting the directory is always safe; SHRECC recreates missing scores during
+the next assessment.
+
 ```python
 assessment = electricity.lcia()
 assessment.hourly(2040)

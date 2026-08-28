@@ -13,7 +13,9 @@ from shrecc.lcia import (
     build_resolved_inventory_basis,
     calculate_lcia,
     consumption_profile_weights,
+    load_source_score_cache,
     resolve_lcia_methods,
+    write_source_score_cache,
 )
 
 METHODS = (
@@ -89,6 +91,65 @@ def test_default_methods_raise_when_ef_is_missing(monkeypatch):
 
     with pytest.raises(ValueError, match="No EF v3.1"):
         resolve_lcia_methods()
+
+
+def test_source_score_cache_round_trip(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        lcia,
+        "_source_score_cache_fingerprint",
+        lambda *args: "background-state",
+    )
+    scores = {
+        ("background", "wind"): np.array([10.0, 100.0]),
+        ("background", "gas"): np.array([20.0, 200.0]),
+    }
+
+    path, loaded = load_source_score_cache(tmp_path, "background", METHODS)
+    assert loaded == {}
+
+    write_source_score_cache(path, scores, METHODS)
+    second_path, loaded = load_source_score_cache(
+        tmp_path,
+        "background",
+        METHODS,
+    )
+
+    assert second_path == path
+    assert set(loaded) == set(scores)
+    for key in scores:
+        np.testing.assert_allclose(loaded[key], scores[key])
+
+
+def test_source_score_fingerprint_changes_with_method_data(monkeypatch):
+    factors = [(("biosphere", "flow"), 1.0)]
+
+    class FakeMethod:
+        metadata = {"unit": "kg"}
+
+        def load(self):
+            return list(factors)
+
+    monkeypatch.setattr(
+        lcia,
+        "bd",
+        SimpleNamespace(
+            projects=SimpleNamespace(current="project"),
+            databases={
+                "background": {
+                    "modified": "2026-01-01",
+                    "depends": ["biosphere"],
+                },
+                "biosphere": {"modified": "2026-01-01"},
+            },
+            Method=lambda method: FakeMethod(),
+        ),
+    )
+
+    first = lcia._source_score_cache_fingerprint("background", METHODS[:1])
+    factors.append((("biosphere", "other-flow"), 2.0))
+    second = lcia._source_score_cache_fingerprint("background", METHODS[:1])
+
+    assert first != second
 
 
 def test_resolved_basis_combines_duplicate_inputs_and_network(monkeypatch):
