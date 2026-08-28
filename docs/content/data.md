@@ -67,6 +67,30 @@ The resulting xarray Dataset can contain:
 The volume variables retain physical quantities for analysis and visualization;
 `consumption_mix` is normalized for mapping to life-cycle inventory activities.
 
+## Choose the output you need
+
+SHRECC keeps hourly calculation results separate from the smaller foreground
+databases intended for reuse in Brightway. The three main methods have distinct
+jobs:
+
+- `create()` prepares inspectable mixes and inventory tables in memory.
+- `write()` writes annual or monthly foreground activities to Brightway.
+- `lcia()` calculates hourly impacts in memory without writing hourly
+  activities. It can be called before or after `write()`.
+
+| User goal | What to call | Where to find the result | Written to Brightway? |
+| --- | --- | --- | --- |
+| Inspect hourly electricity mixes | `electricity.create()` | `electricity.results(year)["consumption_mix"]` | No |
+| Write one profile-weighted inventory per country and year | Set `inventory_resolution="annual"`, then call `create().write()` | The configured foreground database | Yes |
+| Write one profile-weighted inventory per country and month | Set `inventory_resolution="monthly"`, then call `create().write()` | The configured foreground database | Yes |
+| Calculate hourly LCIA intensity per kWh | `assessment = electricity.create().lcia()` | `assessment.hourly(year)["intensity"]` | No |
+| Obtain profile-weighted monthly or annual LCIA | Call `assessment.monthly()` or `assessment.annual()` | Labelled xarray arrays | No |
+
+`consumption_profile` controls the weighting of written annual and monthly
+inventories and of aggregated LCIA results. It does not change the hourly
+one-kWh intensity itself. Hourly results remain available by default; setting
+`retain_hourly_results=False` saves memory but disables `lcia()`.
+
 ## Inventory resolution
 
 `NewDatabase(inventory_resolution=...)` controls the temporal resolution of
