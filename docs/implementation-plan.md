@@ -94,6 +94,10 @@ this separation and should not add public arguments unless necessary.
 3. `4a6a1eb` - user-facing output decision guide.
 4. `d7e20bc` - optional hourly LCIA example in the beginner notebook.
 5. `e8bbed0` - persistent local background LCIA source-score cache.
+6. `854abab` - implementation history and fresh-chat handoff.
+7. `docs: simplify the beginner notebook to the annual default` - remove the
+   explicit time and resolution arguments, retain the full year's hourly
+   results, and write the default annual inventories.
 
 Focused LCIA and pipeline verification after the cache change: 39 tests passed.
 The preceding issue-48 affected suite passed 133 tests, and its GitLab pipeline
