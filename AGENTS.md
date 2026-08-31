@@ -1,5 +1,9 @@
 # AGENTS.md for SHRECC development
 
+## Project
+
+SHRECC is a user-friendly package that creates high-accuracy electricity models for life cycle assessment. It relies on the Brightway LCA software framework, and uses another add-on, the Premise package. It helps LCA practitioners modelling exactly the electricity used by the systems they study, instead of relying on de facto inaccurate, years-old annual averages, as available in generic LCI databases.
+
 ## Main principles
 
 - Parsimony: every new abstraction, argument, and cache must remove more complexity than it introduces. Avoid new dependencies, and keep minimal diffs.

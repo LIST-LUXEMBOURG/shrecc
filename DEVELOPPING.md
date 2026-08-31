@@ -1,4 +1,4 @@
-# Developping SHRECC
+# Developing SHRECC
 
 ## Versionning
 
@@ -33,43 +33,18 @@ https://git.list.lu/shrecc_project/shrecc_data
 
 ### Dependencies
 
-To develop code against this repository, you could install the package in editable mode in a `pip` type of environment.
-+ After having cloned the repository, change to the directory of the root of the repository
-+ and then pip install the package in editable mode
+Create and activate a Python 3.10 or newer virtual environment, then install
+the package and the maintained development extras from the repository root:
 
-
-```
+```bash
 git clone https://git.list.lu/shrecc_project/shrecc
 cd shrecc
-pip install -e .
+python -m pip install -e ".[dev,notebooks,premise]"
 ```
-This will only add the necessary dependencies to use shrecc. 
-If you are planning on doing notebook writing and so on, you might need to add those dependencies yourself.
-The `requirements.txt` file provides a list of dependencies that can be used for notebooks and a full brightway environment.
 
-
-#### Using Conda environment
-There is also a conda environment in the repository that can be used to setup a full environment to develop or run the notebooks.
-
-If you prefer to use Conda, create an environment from the provided [environment.yml](environment.yml) file:
-`conda env create -f environment.yml`
-Then activate the environment: `conda activate shrecc`
-Alternatively, if the environment already exists and you want to update it: `conda env update --file environment.yml --prune`
-
-#### Using Conda environment (avoid Anaconda)
-
-If you prefer to use Conda and meanwhile avoid using Anaconda, create an environment from the provided environment_clean.yml file:
-`conda env create -f environment_clean.yml`
-
-Or, if you have Mamba installed (a faster Conda alternative):
-
-`mamba env create -f environment_clean.yml`
-Then activate the environment: `conda activate shrecc_clean`
-Alternatively, if the environment already exists and you want to update it: `conda env update --file environment_clean.yml --prune`
-
-Or, with Mamba:
-
-`mamba env update -n shrecc_clean -f environment.yml  `
+`pyproject.toml` is the source of truth for runtime and optional dependencies.
+Install only the extras needed for narrower work, for example `.[dev]` for
+tests and linting or `.[docs]` for documentation.
 
 ## Documentation
 
@@ -83,21 +58,15 @@ The directory contains some configuration files, and the index to the documentat
 
 ### Building the Documentation
 
-You can build the documentation locally by installing the documentation Conda environment:
+Install the package with its documentation dependencies:
 
 ```bash
-conda env create -f docs/environment.yml
+python -m pip install -e ".[docs]"
 ```
 
-activating the environment
+Then run the build command:
 
 ```bash
-conda activate sphinx_shrecc
-```
-
-and [running the build command](https://www.sphinx-doc.org/en/master/man/sphinx-build.html#sphinx-build):
-
-```bash
-sphinx-autobuild docs _build/html -a -j auto --ignore 'docs/content/api*' --open-browser
+sphinx-autobuild docs docs/_build/html -a -j auto --ignore 'docs/content/api*' --open-browser
 ```
 
