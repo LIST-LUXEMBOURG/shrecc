@@ -906,6 +906,7 @@ def ensure_tyndp_workbook(
     return paths["workbook"]
 
 
+
 def download_tyndp_scenario_zip(
     scenario,
     year,
@@ -934,26 +935,54 @@ def download_tyndp_scenario_zip(
         requests.HTTPError: If the download response has an HTTP error status.
         ValueError: If the scenario tuple is not supported.
     """
-    paths = tyndp_scenario_paths(
-        data_dir=data_dir,
-        scenario=scenario,
-        year=year,
-        climate_year=climate_year,
-        url_root=url_root,
-    )
-    paths["zip"].parent.mkdir(parents=True, exist_ok=True)
 
-    _log(f"Downloading {paths['url']}", verbose)
+    NT_URL_MAP = {
+        (2030, climate_year): (
+            f"{url_root}MMStandardOutputFile_NT2030_Plexos"
+            f"_CY{climate_year}_2.5_v40.xlsx.zip"
+        ),
+        (2040, climate_year): (
+            f"{url_root}MMStandardOutputFile_NT2040_Plexos"
+            f"_CY{climate_year}_2.5_v40.xlsx.zip"
+        ),
+    }
+
+    if scenario == "NT":
+        key = (year, climate_year)
+        if key not in NT_URL_MAP:
+            raise ValueError(
+                f"NT scenario year {year} with climate year {climate_year} "
+                f"is not supported. Supported NT years: "
+                f"{sorted({k[0] for k in NT_URL_MAP})}."
+            )
+        url = NT_URL_MAP[key]
+        zip_path = Path(data_dir) / f"NT{year}CY{climate_year}.zip"
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+
+        paths = tyndp_scenario_paths(
+            data_dir=data_dir,
+            scenario=scenario,
+            year=year,
+            climate_year=climate_year,
+            url_root=url_root,
+        )
+        paths["zip"].parent.mkdir(parents=True, exist_ok=True)
+
+        url = paths["url"]
+        zip_path = paths["zip"]    
+
+    _log(f"Downloading {url}", verbose)
     http = session if session is not None else requests.Session()
     response = http.get(paths["url"], stream=True, timeout=120)
     response.raise_for_status()
 
-    with paths["zip"].open("wb") as handle:
+    with zip_path.open("wb") as handle:
         for chunk in response.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 handle.write(chunk)
 
-    return paths["zip"]
+    return zip_path
 
 
 def _extract_tyndp_workbook_from_zip(zip_file, workbook, verbose=False):
