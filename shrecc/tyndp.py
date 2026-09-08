@@ -783,15 +783,31 @@ def tyndp_scenario_paths(
     )
     data_dir = Path(data_dir)
     stem = f"{scenario}{year}_CY{climate_year}"
-    zip_name = f"{scenario}{year}CY{climate_year}.zip"
+
+    if scenario == "NT":
+        zip_name = f"NT{year}CY{climate_year}.zip"
+        url = (
+            f"{url_root.rstrip('/')}/MMStandardOutputFile_NT{year}_Plexos"
+            f"_CY{climate_year}_2.5_v40.xlsx.zip"
+        )
+        workbook = (
+            data_dir
+            / f"MMStandardOutputFile_NT{year}_Plexos_CY{climate_year}_2.5_v40.xlsx"
+        )
+    else:
+        zip_name = f"{scenario}{year}CY{climate_year}.zip"
+        url = f"{url_root.rstrip('/')}/{zip_name}"
+        workbook = (
+            data_dir
+            / f"MMStandardOutputFile_{scenario}{year}_Plexos_CY{climate_year}_v11_SoS.xlsb"
+        )
 
     return {
         "production_pickle": data_dir / f"{stem}_prod.pkl",
         "trade_pickle": data_dir / f"{stem}_trade.pkl",
-        "workbook": data_dir
-        / f"MMStandardOutputFile_{scenario}{year}_Plexos_CY{climate_year}_v11_SoS.xlsb",
+        "workbook": workbook,
         "zip": data_dir / zip_name,
-        "url": f"{url_root.rstrip('/')}/{zip_name}",
+        "url": url,
     }
 
 
@@ -906,6 +922,7 @@ def ensure_tyndp_workbook(
     return paths["workbook"]
 
 
+
 def download_tyndp_scenario_zip(
     scenario,
     year,
@@ -934,6 +951,7 @@ def download_tyndp_scenario_zip(
         requests.HTTPError: If the download response has an HTTP error status.
         ValueError: If the scenario tuple is not supported.
     """
+
     paths = tyndp_scenario_paths(
         data_dir=data_dir,
         scenario=scenario,
