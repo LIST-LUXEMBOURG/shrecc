@@ -1,6 +1,10 @@
 SHRECC CHANGELOG
 ================
 
+## 0.1.2.dev1 - 2026-09-08
+
++ fix #49 - correct tyndp download urls
+
 ## 0.1.1 - 2026-07-30
 
 ### Added
