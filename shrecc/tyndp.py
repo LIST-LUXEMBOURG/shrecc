@@ -783,15 +783,31 @@ def tyndp_scenario_paths(
     )
     data_dir = Path(data_dir)
     stem = f"{scenario}{year}_CY{climate_year}"
-    zip_name = f"{scenario}{year}CY{climate_year}.zip"
+
+    if scenario == "NT":
+        zip_name = f"NT{year}CY{climate_year}.zip"
+        url = (
+            f"{url_root.rstrip('/')}/MMStandardOutputFile_NT{year}_Plexos"
+            f"_CY{climate_year}_2.5_v40.xlsx.zip"
+        )
+        workbook = (
+            data_dir
+            / f"MMStandardOutputFile_NT{year}_Plexos_CY{climate_year}_2.5_v40.xlsx"
+        )
+    else:
+        zip_name = f"{scenario}{year}CY{climate_year}.zip"
+        url = f"{url_root.rstrip('/')}/{zip_name}"
+        workbook = (
+            data_dir
+            / f"MMStandardOutputFile_{scenario}{year}_Plexos_CY{climate_year}_v11_SoS.xlsb"
+        )
 
     return {
         "production_pickle": data_dir / f"{stem}_prod.pkl",
         "trade_pickle": data_dir / f"{stem}_trade.pkl",
-        "workbook": data_dir
-        / f"MMStandardOutputFile_{scenario}{year}_Plexos_CY{climate_year}_v11_SoS.xlsb",
+        "workbook": workbook,
         "zip": data_dir / zip_name,
-        "url": f"{url_root.rstrip('/')}/{zip_name}",
+        "url": url,
     }
 
 
@@ -936,53 +952,26 @@ def download_tyndp_scenario_zip(
         ValueError: If the scenario tuple is not supported.
     """
 
-    NT_URL_MAP = {
-        (2030, climate_year): (
-            f"{url_root}MMStandardOutputFile_NT2030_Plexos"
-            f"_CY{climate_year}_2.5_v40.xlsx.zip"
-        ),
-        (2040, climate_year): (
-            f"{url_root}MMStandardOutputFile_NT2040_Plexos"
-            f"_CY{climate_year}_2.5_v40.xlsx.zip"
-        ),
-    }
+    paths = tyndp_scenario_paths(
+        data_dir=data_dir,
+        scenario=scenario,
+        year=year,
+        climate_year=climate_year,
+        url_root=url_root,
+    )
+    paths["zip"].parent.mkdir(parents=True, exist_ok=True)
 
-    if scenario == "NT":
-        key = (year, climate_year)
-        if key not in NT_URL_MAP:
-            raise ValueError(
-                f"NT scenario year {year} with climate year {climate_year} "
-                f"is not supported. Supported NT years: "
-                f"{sorted({k[0] for k in NT_URL_MAP})}."
-            )
-        url = NT_URL_MAP[key]
-        zip_path = Path(data_dir) / f"NT{year}CY{climate_year}.zip"
-        zip_path.parent.mkdir(parents=True, exist_ok=True)
-    else:
-
-        paths = tyndp_scenario_paths(
-            data_dir=data_dir,
-            scenario=scenario,
-            year=year,
-            climate_year=climate_year,
-            url_root=url_root,
-        )
-        paths["zip"].parent.mkdir(parents=True, exist_ok=True)
-
-        url = paths["url"]
-        zip_path = paths["zip"]    
-
-    _log(f"Downloading {url}", verbose)
+    _log(f"Downloading {paths['url']}", verbose)
     http = session if session is not None else requests.Session()
     response = http.get(paths["url"], stream=True, timeout=120)
     response.raise_for_status()
 
-    with zip_path.open("wb") as handle:
+    with paths["zip"].open("wb") as handle:
         for chunk in response.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 handle.write(chunk)
 
-    return zip_path
+    return paths["zip"]
 
 
 def _extract_tyndp_workbook_from_zip(zip_file, workbook, verbose=False):
