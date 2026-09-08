@@ -19,4 +19,4 @@ from .energy_charts import data_processing, get_data
 from .lcia import LCIAResults
 from .pipeline import NewDatabase
 
-__version__ = "0.1.2.dev1"
+__version__ = "0.1.2.dev2"
