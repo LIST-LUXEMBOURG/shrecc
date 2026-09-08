@@ -123,6 +123,7 @@ country-specific high-voltage fallback activity.
 ## Contributing
 
 Please take a look at the [DEVELOPPING.md](https://git.list.lu/shrecc_project/shrecc/-/blob/main/DEVELOPPING.md) file for details on how to contribute code to the repository.
+Notably for the versioning.
 
 ## License
 
