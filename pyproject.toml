@@ -44,6 +44,7 @@ dependencies = [
    "tqdm",
    "xarray",
    "python-calamine>=0.6.2",
+   "openpyxl",
 ]
 license="MIT"
 license-files = ["LICENSE"]

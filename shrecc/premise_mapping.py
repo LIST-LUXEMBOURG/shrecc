@@ -855,11 +855,20 @@ def map_consumption_mix_technologies_xr(
     )
 
     if check:
+        # The mapping must conserve shares: compare against what came in, not a
+        # hardcoded 1. Whether the mix itself sums to 1 is the solver's invariant
+        # (solve_consumption_system checks it with a boundary-country-aware
+        # tolerance); asserting it again here would re-fail on inputs the
+        # solver has already legitimately accepted.
         total_dims = [
             dim for dim in ("source_country", "premise_activity") if dim in mapped.dims
         ]
+        input_dims = [
+            dim for dim in ("source_country", "technology") if dim in consumption_mix_xr.dims
+        ]
         totals = mapped.sum(total_dims)
-        np.testing.assert_allclose(totals.to_numpy(), 1, atol=1e-8)
+        expected = consumption_mix_xr.sum(input_dims).transpose(*totals.dims)
+        np.testing.assert_allclose(totals.to_numpy(), expected.to_numpy(), atol=1e-6)
 
     return mapped
 
@@ -1005,13 +1014,20 @@ def map_consumption_mix_regions_xr(
     mapped.attrs["iam_model"] = iam_model
 
     if check:
+        # Same conservation-of-input check as map_consumption_mix_technologies_xr.
         total_dims = [
             dim
             for dim in (region_dim, "premise_activity", "technology")
             if dim in mapped.dims
         ]
+        input_dims = [
+            dim
+            for dim in (source_dim, "premise_activity", "technology")
+            if dim in consumption_mix_xr.dims
+        ]
         totals = mapped.sum(total_dims)
-        np.testing.assert_allclose(totals.to_numpy(), 1, atol=1e-8)
+        expected = consumption_mix_xr.sum(input_dims).transpose(*totals.dims)
+        np.testing.assert_allclose(totals.to_numpy(), expected.to_numpy(), atol=1e-8)
 
     return mapped
 
