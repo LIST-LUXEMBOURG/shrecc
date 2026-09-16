@@ -115,6 +115,64 @@ def test_chunked_solver_matches_single_solve():
     xr.testing.assert_allclose(xr.concat(chunks, dim="time"), expected)
 
 
+def test_solver_fills_missing_consumption_countries_with_zero():
+    """Trade-only nodes absent from consumption_volume get zero consumption.
+
+    SA-like external source nodes export into the modelled region but have
+    no domestic production or demand tracked in the dataset. They should be
+    treated as zero-consumption nodes; their exports are handled by the
+    unresolved_technology path in the solver.
+    """
+    time = pd.to_datetime(["2040-01-01 00:00"])
+    production_volume = xr.DataArray(
+        [[[100.0], [0.0]]],
+        dims=("time", "producer_country", "technology"),
+        coords={
+            "time": time,
+            "producer_country": ["A", "EXT"],
+            "technology": ["electricity"],
+        },
+    )
+    # EXT exports 30 MWh into A; it has no domestic generation or demand data.
+    trade_volume = xr.DataArray(
+        np.zeros((1, 2, 2)),
+        dims=("time", "exporter_country", "importer_country"),
+        coords={
+            "time": time,
+            "exporter_country": ["A", "EXT"],
+            "importer_country": ["A", "EXT"],
+        },
+    )
+    trade_volume.loc[{"exporter_country": "EXT", "importer_country": "A"}] = 30
+
+    # consumption_volume only covers A — EXT is a trade-only node.
+    consumption_volume = xr.DataArray(
+        [[125.0]],
+        dims=("time", "consumer_country"),
+        coords={"time": time, "consumer_country": ["A"]},
+    )
+
+    # Should not raise; EXT consumption is filled with zero (not balance,
+    # which would be negative and cause a ValueError).
+    results, _ = solve_consumption_system(
+        production_volume,
+        trade_volume,
+        consumption_volume=consumption_volume,
+        unresolved_technology="unknown",
+    )
+
+    # A's measured consumption is preserved.
+    np.testing.assert_allclose(
+        results["consumption_volume"].sel(consumer_country="A").values,
+        125.0,
+    )
+    # EXT has zero tracked consumption.
+    np.testing.assert_allclose(
+        results["consumption_volume"].sel(consumer_country="EXT").values,
+        0.0,
+    )
+
+
 def test_chunked_solver_rejects_cross_chunk_month_hour_imputation():
     production_volume, trade_volume = _solver_inputs()
     times = pd.date_range("2040-01-01", periods=2, freq="h")

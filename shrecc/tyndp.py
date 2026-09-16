@@ -986,17 +986,18 @@ def _extract_tyndp_workbook_from_zip(zip_file, workbook, verbose=False):
         archive_name = names_by_basename.get(workbook.name)
 
         if archive_name is None:
-            xlsb_files = [
+            excel_files = [
                 name
                 for name in archive.namelist()
-                if Path(name).suffix.lower() == ".xlsb"
+                if Path(name).suffix.lower() in (".xlsb", ".xlsx")
+                and not Path(name).name.startswith(".")
             ]
-            if len(xlsb_files) != 1:
+            if len(excel_files) != 1:
                 raise FileNotFoundError(
                     f"Could not find {workbook.name!r} in {zip_file}. "
-                    f"Found XLSB files: {xlsb_files}"
+                    f"Found Excel files: {excel_files}"
                 )
-            archive_name = xlsb_files[0]
+            archive_name = excel_files[0]
 
         with archive.open(archive_name) as source, workbook.open("wb") as target:
             target.write(source.read())
@@ -1022,7 +1023,39 @@ def _read_excel_dataframe(filename, **kwargs):
     if "engine" in read_kwargs and read_kwargs["engine"] is None:
         read_kwargs.pop("engine")
 
-    return cast(pd.DataFrame, pd.read_excel(filename, **read_kwargs))
+    try:
+        return cast(pd.DataFrame, pd.read_excel(filename, **read_kwargs))
+    except ImportError as exc:
+        # Some engines (e.g. "calamine") are optional. NT workbooks are .xlsx
+        # files that do not require calamine, so retry without a specific
+        # engine and let pandas choose the default openpyxl-based reader.
+        if "engine" not in read_kwargs:
+            raise
+        read_kwargs.pop("engine")
+        return cast(pd.DataFrame, pd.read_excel(filename, **read_kwargs))
+    except ValueError as exc:
+        sheet_name = read_kwargs.get("sheet_name")
+        if not isinstance(sheet_name, str) or "not found" not in str(exc).lower():
+            raise
+        # TYNDP workbooks aren't consistently named across scenarios (e.g. the
+        # "Global Ambition" workbook uses "Hourly Market Data emarket" while
+        # "National Trends" just uses "Hourly Market Data"). Fall back to a
+        # sheet whose name is a prefix/suffix match of the requested one
+        # before giving up.
+        available = pd.ExcelFile(filename, engine=read_kwargs.get("engine")).sheet_names
+        candidates = [
+            name
+            for name in available
+            if sheet_name.startswith(name) or name.startswith(sheet_name)
+        ]
+        if len(candidates) != 1:
+            raise ValueError(
+                f"Worksheet named {sheet_name!r} not found in {filename}, and no "
+                f"unambiguous fallback match among {available}"
+                + (f" (candidates: {candidates})" if candidates else "")
+            ) from exc
+        read_kwargs["sheet_name"] = candidates[0]
+        return cast(pd.DataFrame, pd.read_excel(filename, **read_kwargs))
 
 
 def _log(message, verbose):
@@ -1037,6 +1070,9 @@ def _parse_tyndp_datetime_index(index, model_year):
     The original files used in the notebook have a two-level index where the
     second level stores labels such as ``"01Jan00:00"`` without a year. If the
     pickle already contains datetimes, they are returned unchanged.
+
+    NT workbooks use all-caps month abbreviations (``"01SEP00:00"``); these are
+    normalised to title-case before parsing so that ``%b`` matches correctly.
 
     Args:
         index: Original TYNDP index.
@@ -1054,15 +1090,34 @@ def _parse_tyndp_datetime_index(index, model_year):
     if pd.api.types.is_datetime64_any_dtype(raw_index):
         return pd.DatetimeIndex(raw_index)
 
-    labels = raw_index.astype(str)
+    labels = raw_index.astype(str).str.strip()
 
     if labels.str.contains(r"\d{4}", regex=True).all():
         return pd.to_datetime(labels)
 
-    return pd.to_datetime(
-        labels + str(model_year),
-        format="%d%b%H:%M%Y",
-    )
+    # Map month abbreviations to their numeric value instead of relying on
+    # strptime's locale-dependent %b directive (English locale variants don't
+    # agree on abbreviations -- e.g. "English (Ireland)" uses "Sept" for
+    # September instead of the standard "Sep", which silently breaks %b).
+    _MONTH_NUMBERS = {
+        "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+        "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+    }
+
+    def _normalise(label):
+        upper = label.upper()
+        for month, number in _MONTH_NUMBERS.items():
+            if month in upper:
+                day_str, rest = upper.split(month, 1)
+                return f"{day_str}{number:02d}{rest}"
+        return label
+
+    labels = labels.map(_normalise)
+
+    # Parse without the year (pandas' Cython strptime is strict about %M width
+    # when %Y is appended), then replace the placeholder year with model_year.
+    parsed = pd.to_datetime(labels, format="%d%m%H:%M")
+    return parsed.map(lambda t: t.replace(year=model_year))
 
 
 def load_technology_concordance(filename, sheet_name):
@@ -1314,11 +1369,18 @@ def _aggregate_tyndp_trade(trade, connections):
 
 
 def _clean_tyndp_connection_labels(labels):
-    """Remove TYNDP concept suffixes from cross-border connection labels."""
+    """Remove TYNDP concept suffixes from cross-border connection labels.
+
+    Also normalises the from/to separator: some TYNDP scenario workbooks
+    (e.g. "National Trends") export connection labels as ``"AL00->GR00"``,
+    while others (e.g. "Global Ambition") and the ``connections`` mapping
+    both use ``"AL00-GR00"``.
+    """
     return (
         pd.Index(labels)
         .astype(str)
         .str.replace(r"\s*/?(Concept|Real)\s+\d+\s*$", "", regex=True)
+        .str.replace("->", "-", regex=False)
         .str.strip()
     )
 

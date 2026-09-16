@@ -462,3 +462,71 @@ def test_consumption_mix_zero_consumption_still_raises_by_default():
 
     with pytest.raises(ValueError, match="zero total consumption"):
         tyndp.consumption_mix_from_z_gross(Z_gross)
+
+
+def test_read_excel_dataframe_falls_back_when_calamine_missing(tmp_path, monkeypatch):
+    """_read_excel_dataframe retries without engine when calamine is not installed."""
+    xlsx = tmp_path / "data.xlsx"
+    pd.DataFrame({"a": [1, 2]}).to_excel(xlsx, index=False)
+
+    calls = []
+
+    original_read_excel = pd.read_excel
+
+    def mock_read_excel(filename, **kwargs):
+        calls.append(kwargs.get("engine"))
+        if kwargs.get("engine") == "calamine":
+            raise ImportError("Missing optional dependency 'python-calamine'.")
+        return original_read_excel(filename, **kwargs)
+
+    monkeypatch.setattr(pd, "read_excel", mock_read_excel)
+
+    result = tyndp._read_excel_dataframe(xlsx, engine="calamine")
+
+    assert calls == ["calamine", None]
+    assert list(result.columns) == ["a"]
+
+
+def test_read_excel_dataframe_reraises_import_error_without_engine(tmp_path, monkeypatch):
+    """_read_excel_dataframe does not swallow ImportErrors unrelated to engine."""
+    xlsx = tmp_path / "data.xlsx"
+    pd.DataFrame({"a": [1]}).to_excel(xlsx, index=False)
+
+    def mock_read_excel(filename, **kwargs):
+        raise ImportError("some other import problem")
+
+    monkeypatch.setattr(pd, "read_excel", mock_read_excel)
+
+    with pytest.raises(ImportError, match="some other import problem"):
+        tyndp._read_excel_dataframe(xlsx)
+
+
+def test_extract_tyndp_workbook_from_zip_finds_xlsx(tmp_path):
+    """_extract_tyndp_workbook_from_zip falls back to .xlsx when name is not matched."""
+    zip_path = tmp_path / "NT2030CY2009.zip"
+    workbook = tmp_path / "MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx"
+
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr(
+            "MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx",
+            b"xlsx-bytes",
+        )
+        # macOS metadata entry that must be ignored
+        archive.writestr(
+            "__MACOSX/._MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx",
+            b"meta",
+        )
+
+    tyndp._extract_tyndp_workbook_from_zip(zip_path, workbook)
+
+    assert workbook.read_bytes() == b"xlsx-bytes"
+
+
+def test_parse_tyndp_datetime_index_handles_uppercase_months():
+    """NT workbooks use all-caps month abbreviations; parsing must normalise them."""
+    index = pd.Index(["01JAN00:00", "15SEP12:00", "31DEC23:00"])
+    result = tyndp._parse_tyndp_datetime_index(index, model_year=2030)
+    assert isinstance(result, pd.DatetimeIndex)
+    assert result[0] == pd.Timestamp("2030-01-01 00:00")
+    assert result[1] == pd.Timestamp("2030-09-15 12:00")
+    assert result[2] == pd.Timestamp("2030-12-31 23:00")
