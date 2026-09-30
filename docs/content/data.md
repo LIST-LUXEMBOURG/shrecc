@@ -1,49 +1,147 @@
 # SHRECC data
 
-shrecc requires 2 types of data:
+SHRECC keeps small, version-controlled mapping resources inside the Python
+package and stores downloaded or generated time series in a user-data cache.
+This distinction lets installed packages remain reproducible without bundling
+large scenario workbooks or solved hourly arrays.
 
-+ The time series of the electricity mixes
-+ Mapping data
+## Packaged mapping data
 
-## Mapping data
+The default resources are available through the `shrecc.data` package:
 
-The package is configured to load the mapping data from within the package itself.
-The data is under the `shrecc.data` subdirectory.
-
+```text
+shrecc/data/
+|-- el_map_all_norm.csv
+|-- el_map_all_norm_w_ned.csv
+|-- generation_units_by_country.csv
+|-- techs_agg.json
+`-- tyndp/
+    |-- remind-eu-topology.json
+    |-- tyndp_activities.csv
+    |-- tyndp_connections.csv
+    `-- tyndp_countries.csv
 ```
-shrecc
-├── data
-│   ├── el_map_all_norm.csv
-│   ├── generation_units_by_country.csv
-│   └── techs_agg.json
-├── database.py
-├── download.py
-├── __init__.py
-└── treatment.py
 
+- `el_map_all_norm.csv` contains country-specific ecoinvent activity shares for
+  established electricity technologies.
+- `el_map_all_norm_w_ned.csv` retains the alternative NED.nl production labels
+  prepared for filling gaps in Netherlands Energy Charts data. It is not selected
+  automatically by the current Energy Charts adapter.
+- `generation_units_by_country.csv` records the technologies represented in
+  each historical country mix.
+- `techs_agg.json` harmonizes Energy Charts production and trade labels.
+- `tyndp_activities.csv` maps TYNDP technologies to compatible premise or
+  ecoinvent electricity activities.
+- `tyndp_connections.csv` and `tyndp_countries.csv` map TYNDP nodes and links to
+  country codes.
+- `remind-eu-topology.json` supplies the default REMIND-EU regional topology.
+
+Custom paths can be passed to `NewDatabase` through `technology_mapping`,
+`country_mapping`, `ecoinvent_mapping`, and `topology_files`.
+
+The editable `mapping_sources/electricity_sources.xlsx` workbook is retained in
+the repository for maintaining the Energy Charts and NED.nl concordances, but it
+is not installed as package data.
+
+## Downloaded and generated data
+
+By default, `NewDatabase` stores source data beneath the platform-specific
+`appdirs.user_data_dir("shrecc")` directory. Supplying `data_dir` selects a
+different cache root.
+
+Historical runs cache Energy Charts API responses and canonical solved results.
+Prospective runs cache downloaded TYNDP archives, extracted workbooks, and parsed
+production and trade tables. These files are local data and are not package
+resources.
+
+Canonical solved results are written as compressed time chunks with a manifest.
+Only chunks intersecting the requested date or timestamp selection are loaded.
+The resulting xarray Dataset can contain:
+
+- `production_volume`
+- `trade_volume`
+- `consumption_volume`
+- `consumption_mix`
+- `consumption_mix_volume`
+
+The volume variables retain physical quantities for analysis and visualization;
+`consumption_mix` is normalized for mapping to life-cycle inventory activities.
+
+## Choose the output you need
+
+SHRECC keeps hourly calculation results separate from the smaller foreground
+databases intended for reuse in Brightway. The three main methods have distinct
+jobs:
+
+- `create()` prepares inspectable mixes and inventory tables in memory.
+- `write()` writes annual or monthly foreground activities to Brightway.
+- `lcia()` calculates hourly impacts in memory without writing hourly
+  activities. It can be called before or after `write()`.
+
+| User goal | What to call | Where to find the result | Written to Brightway? |
+| --- | --- | --- | --- |
+| Inspect hourly electricity mixes | `electricity.create()` | `electricity.results(year)["consumption_mix"]` | No |
+| Write one profile-weighted inventory per country and year | Set `inventory_resolution="annual"`, then call `create().write()` | The configured foreground database | Yes |
+| Write one profile-weighted inventory per country and month | Set `inventory_resolution="monthly"`, then call `create().write()` | The configured foreground database | Yes |
+| Calculate hourly LCIA intensity per kWh | `assessment = electricity.create().lcia()` | `assessment.hourly(year)["intensity"]` | No |
+| Obtain profile-weighted monthly or annual LCIA | Call `assessment.monthly()` or `assessment.annual()` | Labelled xarray arrays | No |
+
+`consumption_profile` controls the weighting of written annual and monthly
+inventories and of aggregated LCIA results. It does not change the hourly
+one-kWh intensity itself. Hourly results remain available by default; setting
+`retain_hourly_results=False` saves memory but disables `lcia()`.
+
+## Inventory resolution
+
+`NewDatabase(inventory_resolution=...)` controls the temporal resolution of
+the written foreground activities:
+
+- `"annual"` (the default) writes one activity per consumer country and model
+  year. `"yearly"` is accepted as an alias.
+- `"monthly"` writes one activity per consumer country and selected calendar
+  month.
+
+Annual and monthly mixes apply `consumption_profile` independently within each
+inventory period before normalization. Hourly mixes are retained as
+calculation data and are never written as Brightway activities. Calling
+`NewDatabase(..., inventory_resolution="hourly")` therefore raises with
+guidance to use `NewDatabase.lcia()`.
+
+Written activity names end in `YYYY` or `YYYY-MM`. The resolution, represented
+period, and consumption profile are also recorded in each Brightway activity's
+`comment` field for display in ActivityBrowser documentation.
+
+## Temporal LCIA
+
+`NewDatabase.lcia()` calculates hourly LCIA intensities from retained canonical
+results without creating hourly foreground activities. With no explicit
+methods, it selects all installed Brightway methods whose method-family label
+is exactly `EF v3.1`.
+
+The default `linear` engine resolves and scores each unique background input
+once, maps consumer countries one at a time, and multiplies the resulting
+source-score matrix by hourly coefficients. The optional `multilca` engine
+submits the same coefficients as composite functional units in bounded
+`FastScoresOnlyMultiLCA` batches.
+
+The linear engine keeps its compact background-activity scores in
+`lcia_source_scores_v1` below the configured SHRECC `data_dir` (or the default
+platform user-data directory). The cache is invalidated when the Brightway
+project, background database state, dependencies, or characterization methods
+change. It contains locally derived ecoinvent results: do not publish it.
+Deleting the directory is always safe; SHRECC recreates missing scores during
+the next assessment.
+
+```python
+assessment = electricity.lcia()
+assessment.hourly(2040)
+assessment.monthly()
+assessment.annual()
+assessment.impact_category_units
 ```
 
-When calling the {py:func}`shrecc.database.filt_cutoff` function, if no value is passed to the `mapping_root` argument, the data is taken from the package, but the user can supply a path to a directory that contains a subdirectory `data` that has the necessary files (`el_map_all_norm.csv`, etc.)
-
-
-### el_map_all_norm.csv
-
-This CSV file contains a mapping of ENTSO-E technology categories to their corresponding ecoinvent classifications.
-
-### generation_units_by_country.csv
-
-This csv file is a binary matrix indicating which electricity generation technologies are present in each country, used to support technology mapping and data filtering.
-
-### techs_agg.json
-
-This JSON file provides a mapping of various electricity generation and trade technology labels to consistent names.
-
-## Time series
-
-This data is pre-calculated, and stored in the [shrecc_data](https://git.list.lu/shrecc_project/shrecc_data) repository.
-
-The user must download this data to the `shrecc` appdirs user directory.
-This can be done with the {py:func}`shrecc.download.download_shrecc_data`, and it will automatically place the data in the right place.
-The user can also manually download the data.
-
-The data can also be generated on the fly. Please look at the example notebook for how to do this.
+The hourly result includes LCIA intensity per kWh, raw consumption-profile
+weights, and each hour's contribution to the profile-weighted annual
+intensity. Brightway method units are retained as the
+`impact_category_unit` xarray coordinate in hourly, monthly, and annual
+results, and as a label-to-unit mapping in `impact_category_units`.

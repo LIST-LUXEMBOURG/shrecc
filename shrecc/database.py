@@ -2,6 +2,8 @@
 # Licensed under the MIT License (see LICENSE file for details).
 # Authors: [Sabina Bednářová, Thomas Gibon]
 
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from packaging.version import parse as vparse
@@ -9,18 +11,95 @@ from pathlib import Path
 import re
 
 import bw2data as bd
-import numpy as np
 import pandas as pd
-from bw2data.query import Filter, Query
 
-from shrecc.treatment import load_from_pickle, save_to_pickle
+from shrecc._legacy_database import (
+    apply_mapping,
+    filter_by_countries,
+    filter_by_range,
+    filter_by_times,
+    load_time_series_data,
+    prepare_consumption_data,
+    tech_mapping,
+)
+from shrecc.mapping import (
+    activity_mix_to_database_table,
+    load_ecoinvent_mapping as load_mapping_data,
+    map_consumption_mix_to_ecoinvent_activities,
+    validate_inventory_resolution,
+)
+from shrecc.result_store import (
+    MANIFEST_FILENAME,
+    consumption_result_cache_path,
+    load_consumption_result_cache,
+)
 
 UNUSED_SOURCE = "Import balance (physical)"
+DEFAULT_ACTIVITY_FALLBACK_LOCATIONS = ("RER", "RoW", "GLO")
+FOREGROUND_ACTIVITY_NAME = "electricity, consumption mix"
+FOREGROUND_REFERENCE_PRODUCT = "electricity"
+FOREGROUND_UNIT = "kilowatt hour"
+
+
+@dataclass(frozen=True)
+class BackgroundActivityIndex:
+    """Indexed Brightway activity keys for one background database."""
+
+    database_name: str
+    by_name_location_unit: dict
+    by_name_location: dict
+
+
+def build_background_activity_index(eidb_name):
+    """Load and index one Brightway background database for fast matching."""
+    database = bd.Database(eidb_name)
+    by_name_location_unit = defaultdict(list)
+    by_name_location = defaultdict(list)
+    if hasattr(database, "nodes_to_dataframe"):
+        nodes = database.nodes_to_dataframe(
+            columns=["database", "code", "name", "location", "unit"],
+            return_sorted=False,
+        )
+        records = (
+            (
+                (row.database, row.code),
+                row.name,
+                row.location,
+                row.unit,
+            )
+            for row in nodes.itertuples(index=False)
+        )
+    else:
+        records = (
+            (
+                key,
+                activity.get("name"),
+                activity.get("location"),
+                activity.get("unit"),
+            )
+            for key, activity in database.load().items()
+        )
+
+    for key, name, location, unit in records:
+        if name is None or location is None:
+            continue
+        by_name_location[(name, location)].append(key)
+        if unit is not None:
+            by_name_location_unit[(name, location, unit)].append(key)
+    return BackgroundActivityIndex(
+        database_name=eidb_name,
+        by_name_location_unit={
+            key: tuple(values) for key, values in by_name_location_unit.items()
+        },
+        by_name_location={
+            key: tuple(values) for key, values in by_name_location.items()
+        },
+    )
 
 
 def filt_cutoff(
     countries,
-    times=[],
+    times=None,
     general_range=0,
     refined_range=0,
     freq=0,
@@ -32,7 +111,6 @@ def filt_cutoff(
     Filters data based on selected countries and times (either one-off, a range, or periodical range).
 
     Args:
-        year (int): Selected year of the downloaded data.
         countries (list of str): Countries selected by the user for their database.
             E.g. countries=['FR', 'DE'].
         times (list of str): Selecting one specific time, e.g. times = ['2023-06-16 8:00:00', '2023-06-16 22:00:00'].
@@ -40,7 +118,8 @@ def filt_cutoff(
         general_range (list of str): Selecting a general range, e.g. for the month of June
             general_range = ['2023-06-01 01:00:00', '2023-06-30 23:00:00']. Can be applied alone.
         refined_range (list of int): Refining range of general range, e.g. mornings of June (previously selected in general_range):
-            refined_range = [8, 9, 10, 11]. Can only be applied with general_range.
+            refined_range = [8, 12], in hours (24-hour format). Can only be
+            applied with general_range.
         freq (str): Days to be included, e.g. freq='D' selects calendar days,
             see https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#offset-aliases.
         cutoff (float): Cutoff value for technology values.
@@ -51,6 +130,8 @@ def filt_cutoff(
     Returns:
         pd.DataFrame: The filtered dataframe.
     """
+    times = [] if times is None else list(times)
+
     if path_to_data:
         print(f"Using mapping root: {path_to_data}")
         path_to_data = Path(path_to_data)
@@ -65,262 +146,65 @@ def filt_cutoff(
     else:
         raise ValueError("Either `times` or `general_range` must be provided")
 
-    dataframe = tech_mapping(year, path_to_data)
     now = datetime.now()
     print(f"{now} Filtering dataframe...")
-    dataframe = dataframe.droplevel("source", axis=1)
-    dataframe = filter_by_countries(dataframe, countries)
+    cache_dir = consumption_result_cache_path(path_to_data, year)
+    if (cache_dir / MANIFEST_FILENAME).is_file():
+        dataframe = _filt_canonical_consumption_results(
+            cache_dir,
+            countries=countries,
+            times=times,
+            general_range=general_range,
+            refined_range=refined_range,
+            freq=freq,
+        )
+    else:
+        dataframe = tech_mapping(year, path_to_data)
+        dataframe = dataframe.droplevel("source", axis=1)
+        dataframe = filter_by_countries(dataframe, countries)
 
-    if len(times):
-        # For backwards compatibility and making sure datetime is used in the filtering
-        times = pd.to_datetime(times)
-        dataframe = filter_by_times(dataframe, times)
-    if general_range:
-        dataframe = filter_by_range(dataframe, general_range, refined_range, freq)
+        if len(times):
+            # Ensure datetime is used in the backwards-compatible filtering.
+            times = pd.to_datetime(times)
+            dataframe = filter_by_times(dataframe, times)
+        if general_range:
+            dataframe = filter_by_range(dataframe, general_range, refined_range, freq)
     dataframe = apply_cutoff(dataframe, cutoff, include_cutoff)
     now = datetime.now()
     print(f"{now} Dataframe filtered.")
     return dataframe
 
 
-def load_mapping_data(mapping_location):
-    """
-    Load the mapping data from an Excel file.
-    mapping_collection can be either a string pointing to a full file, or a directory.
-    If it is a directory, it will assume that the file name is `el_map_all_norm.csv`
-
-    Args:
-        mapping_location (str or Path): a full filename as string or path to the scaled technology mapping.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the technology mapping data from the Excel file.
-    """
-    if isinstance(mapping_location, str):
-        mapping_file = Path(mapping_location)
-    elif isinstance(mapping_location, Path) and mapping_location.is_dir():
-        mapping_file = mapping_location / "el_map_all_norm.csv"
-    elif isinstance(mapping_location, Path) and mapping_location.is_file():
-        mapping_file = mapping_location
-    else:
-        # We will use the file included in the SHRECC.data module
-        mapping_file = mapping_location / "el_map_all_norm.csv"
-    df = pd.read_csv(
-        mapping_file,
-        index_col=[0, 1, 2, 3],
-        header=[0, 1],
+def _filt_canonical_consumption_results(
+    cache_dir,
+    *,
+    countries,
+    times,
+    general_range,
+    refined_range,
+    freq,
+):
+    selected_times = times if len(times) else None
+    selected_range = general_range if general_range else None
+    results = load_consumption_result_cache(
+        cache_dir,
+        times=selected_times,
+        general_range=selected_range,
+        variables=["consumption_mix"],
     )
-    return df
-
-
-def load_time_series_data(path_to_data, year):
-    """
-    Load the time series data from a pickle file and format it as a DataFrame.
-
-    Args:
-        path_to_data (str or Path): The path to the directory containing the time series data.
-        year (int): The year corresponding to the time series data.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the time series data, with levels reordered and sorted.
-    """
-    path_to_data = Path(path_to_data)
-    filename = path_to_data / f"{year}" / f"indices_{year}.pkl"
-    indices = load_from_pickle(filename)
-    Z_cons_sp = load_from_pickle(path_to_data / f"{year}" / f"Z_cons_{year}.pkl")
-    Z_cons = pd.DataFrame(
-        np.float32(Z_cons_sp.todense()),
-        index=indices["index"],
-        columns=indices["columns"],
+    activity_mapping = load_mapping_data(files("shrecc.data"))
+    activity_mix = map_consumption_mix_to_ecoinvent_activities(
+        results["consumption_mix"],
+        activity_mapping,
     )
-    return Z_cons.reorder_levels(["time", "source", "country"], axis=1).sort_index(
-        axis=1
+    return activity_mix_to_database_table(
+        activity_mix,
+        countries=countries,
+        times=selected_times,
+        general_range=selected_range,
+        refined_range=refined_range if refined_range else None,
+        freq=freq if freq else None,
     )
-
-
-def prepare_consumption_data(Z_cons):
-    """
-    Prepare the consumption data by removing trade data and adjusting indices.
-
-    Args:
-        Z_cons (pd.DataFrame): The original consumption data DataFrame.
-
-    Returns:
-        pd.DataFrame: The prepared consumption data, with the trade data removed and indices swapped.
-    """
-    Z_cons = Z_cons.sort_index()
-
-    if "trade" in Z_cons.index.get_level_values("source"):
-        Z_cons_to_multiply = Z_cons.drop("trade", axis=0).copy()
-    else:
-        Z_cons_to_multiply = Z_cons.copy()
-    Z_cons_to_multiply.index.names = ["source", "geography_mix"]
-
-    return Z_cons_to_multiply.swaplevel()
-
-
-def apply_mapping(Z_cons_to_multiply, el_map_all_norm):
-    """
-    Apply the technology mapping to the consumption data.
-
-    Args:
-        Z_cons_to_multiply (pd.DataFrame): The consumption data to be mapped.
-        el_map_all_norm (pd.DataFrame): The normalized mapping data.
-
-    Returns:
-        pd.DataFrame: The resulting DataFrame after applying the technology mapping.
-    """
-
-    # Changing data types to float32 significantly reduces the product time
-    el_map_to_multiply = el_map_all_norm.reindex(
-        Z_cons_to_multiply.index, axis=1
-    ).astype("float32")
-    el_map_to_multiply["NIE"] = el_map_all_norm["GB"][
-        el_map_to_multiply["NIE"].columns
-    ].astype("float32")
-    el_map_to_multiply["UK"] = el_map_all_norm["GB"][
-        el_map_to_multiply["UK"].columns
-    ].astype("float32")
-
-    el_map_to_multiply = el_map_to_multiply.fillna(0)
-    LCI_cons = el_map_to_multiply.dot(Z_cons_to_multiply)
-
-    if LCI_cons.isna().sum().sum():
-        return LCI_cons.fillna(0)
-
-    return LCI_cons
-
-
-def tech_mapping(year, path_to_data, path_to_mapping=None):
-    """
-    Main function to map the technologies and scale them to 1 kWh.
-
-    Args:
-        year (int): The year corresponding to the data.
-        path_to_data (str or Path): Root directory of the data.
-        path_to_mapping (str or Path): File with the mapping of the scaled technology mappings.
-                                        If None, it will use the mapping from the package.
-
-    Returns:
-        pd.DataFrame: A DataFrame with the scaled technology mappings.
-    """
-    now = datetime.now()
-    print(f"{now} Mapping technologies...")
-    if path_to_mapping:
-        el_map_all_norm = load_mapping_data(path_to_mapping)
-    else:
-        data_dir = files("shrecc.data")
-        el_map_all_norm = load_mapping_data(data_dir)
-    Z_cons = load_time_series_data(path_to_data, year)
-    Z_cons_to_multiply = prepare_consumption_data(Z_cons)
-    filename = Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl")
-    if filename.exists():
-        LCI_cons_scaled = load_from_pickle(filename)
-    else:
-        LCI_cons = apply_mapping(Z_cons_to_multiply, el_map_all_norm)
-        sum = LCI_cons.sum()
-        filename = Path(path_to_data / f"{year}" / f"Z_load_{year}.pkl")
-        load = load_from_pickle(filename)
-        load_difference_row = (
-            "RER",
-            "electricity, high voltage, European attribute mix",
-            "electricity, high voltage",
-            "kWh",
-        )
-
-        load_stacked = load.stack()
-        load_stacked.index.names = ["country", "time"]
-        load_stacked = load_stacked[load_stacked != 0]
-        merged = load_stacked.reset_index(name="load_value").merge(
-            sum.reset_index(), how="inner", on=["time", "country"]
-        )
-        merged.rename(columns={0: "sum"}, inplace=True)
-        merged["difference"] = merged["load_value"] - merged["sum"]
-        merged = merged[merged["difference"] > 0]
-        merged.set_index(["time", "source", "country"], inplace=True)
-
-        LCI_cons.sort_index(inplace=True)
-        LCI_cons.sort_index(axis=1, inplace=True)
-        LCI_cons.loc[load_difference_row] = merged["difference"]
-        LCI_cons.loc[load_difference_row].fillna(0, inplace=True)
-        LCI_cons_scaled = LCI_cons / LCI_cons.sum()
-        save_to_pickle(
-            LCI_cons_scaled,
-            Path(path_to_data / f"{year}" / f"LCI_cons_scaled_{year}.pkl"),
-        )
-    now = datetime.now()
-    print(f"{now} Technologies mapped.")
-    return LCI_cons_scaled
-
-
-def filter_by_countries(dataframe, countries):
-    """
-    Filter the dataframe by selected countries.
-
-    Args:
-        dataframe (pd.DataFrame): The original dataframe containing data for multiple countries.
-        countries (list of str): A list of country codes to filter by.
-
-    Returns:
-        pd.DataFrame: A dataframe filtered by the specified countries.
-    """
-    if "country" not in dataframe.columns.names:
-        print("Couldnt find country to filter")
-        return
-
-    return dataframe.loc[
-        :, dataframe.columns.get_level_values("country").isin(countries)
-    ]
-
-
-def filter_by_times(dataframe, times):
-    """
-    Filter the dataframe by specific times.
-
-    Args:
-        dataframe (pd.DataFrame): The original dataframe containing data for multiple times.
-        times (list of str): A list of specific times to filter by.
-
-    Returns:
-        pd.DataFrame: A dataframe filtered by the specified times.
-    """
-    return dataframe.loc[:, dataframe.columns.get_level_values("time").isin(times)]
-
-
-def filter_by_range(dataframe, general_range, refined_range, freq):
-    """
-    Filter the dataframe by a general time range and optionally by a refined time range.
-
-    Args:
-        dataframe (pd.DataFrame): The original dataframe containing data.
-        general_range (list of str): The start and end of the general range to filter by (e.g., ['2023-06-01', '2023-06-30']).
-        refined_range (list of int): A list specifying the refined range of hours to filter within the general range.
-        freq (str): The frequency for generating timestamps (e.g., 'D' for daily).
-
-    Returns:
-        pd.DataFrame: A dataframe filtered by the specified time range and refined range.
-    """
-    df_filt = dataframe.loc[:, general_range[0] : general_range[1]]
-    if refined_range and len(refined_range) > 1:
-        timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq
-        )
-        timestamps_range = timestamp[
-            (timestamp.hour >= refined_range[0]) & (timestamp.hour <= refined_range[1])
-        ]
-        df_filt = df_filt.loc[
-            :,
-            pd.to_datetime(df_filt.columns.get_level_values("time")).isin(
-                timestamps_range
-            ),
-        ]
-    elif refined_range and len(refined_range) == 1:
-        timestamp = pd.date_range(
-            start=general_range[0], end=general_range[1], freq=freq
-        )
-        df_filt = df_filt.loc[
-            :, pd.to_datetime(df_filt.columns.get_level_values("time")).isin(timestamp)
-        ]
-    return df_filt.T.groupby(level="country").mean().T
 
 
 def apply_cutoff(df_filt, cutoff, include_cutoff):
@@ -335,23 +219,20 @@ def apply_cutoff(df_filt, cutoff, include_cutoff):
     Returns:
         pd.DataFrame: A dataframe with values below the cutoff set to zero, optionally including a "rest" category.
     """
-    sums = []
-    for col in df_filt.columns:
-        select = df_filt.loc[:, col]
-        sum_smaller_than_cutoff = select[select.le(cutoff)].sum()
-        sums.append(sum_smaller_than_cutoff)
-    df_filt[df_filt < cutoff] = 0
-    if include_cutoff:
-        df_filt.loc[
-            (
-                "RER",
-                "market group for electricity, high voltage",
-                "electricity, high voltage",
-                "kWh",
-            ),
-            :,
-        ] = sums
-    return df_filt
+    cutoff_totals = df_filt.where(df_filt.le(cutoff), 0).sum(axis=0)
+    result = df_filt.mask(df_filt.lt(cutoff), 0)
+    if not include_cutoff:
+        return result
+
+    rest_row = (
+        "RER",
+        "market group for electricity, high voltage",
+        "electricity, high voltage",
+        "kWh",
+    )
+    rest = cutoff_totals.to_frame().T
+    rest.index = pd.MultiIndex.from_tuples([rest_row], names=result.index.names)
+    return pd.concat([result.drop(index=rest_row, errors="ignore"), rest])
 
 
 def setup_database(project_name, db_name):
@@ -374,26 +255,48 @@ def setup_database(project_name, db_name):
     return elec_db
 
 
-def map_known_inputs(eidb_name, dataframe_filt):
+def map_known_inputs(
+    eidb_name,
+    dataframe_filt,
+    strict=False,
+    include_network=True,
+    fallback_locations=DEFAULT_ACTIVITY_FALLBACK_LOCATIONS,
+    background_index=None,
+):
     """
     Maps known inputs from the ecoinvent database to the filtered dataframe.
 
     Args:
         eidb_name (str): The name of the ecoinvent database in the BW project.
         dataframe_filt (pd.DataFrame): The filtered dataframe containing technology data.
+        strict (bool): Raise an error if a required activity cannot be matched uniquely.
+        include_network (bool): Also resolve the fixed electricity-network inputs.
+        fallback_locations: Ordered fallback geographies tried when the requested
+            activity name and unit do not exist at the requested geography.
+        background_index: Optional prebuilt index for ``eidb_name``. Reuse this
+            when resolving several tables against the same background database.
 
     Returns:
         dict: A dictionary mapping known inputs to their corresponding entries in the ecoinvent database.
     """
-    ei_db = bd.Database(eidb_name)
-    ei_db_data = ei_db.load()
+    if background_index is None:
+        background_index = build_background_activity_index(eidb_name)
+    if background_index.database_name != eidb_name:
+        raise ValueError(
+            "Background activity index belongs to "
+            f"{background_index.database_name!r}, not {eidb_name!r}"
+        )
     known_inputs = {}
+    missing_inputs = []
     country_to_code = {
         "Germany": "DE",
         "France": "FR",
     }
-    for idx in dataframe_filt.index:
-        loc, name, prod, unit = idx
+    active_rows = dataframe_filt.ne(0).any(axis=1)
+    for idx in dataframe_filt.index[active_rows]:
+        original_loc, original_name, prod, unit = idx
+        loc = original_loc
+        name = original_name
         # Region names in ENTSOE and ecoinvent don't exactly match
         # Only UK seems concerned but consider using a dictionary
         if loc == "UK":
@@ -408,37 +311,73 @@ def map_known_inputs(eidb_name, dataframe_filt):
         if any(v in eidb_name for v in ("3.11", "3.12")):
             pattern = re.compile(r"from (Germany|France)")
             name = pattern.sub(repl, name)
-        q = Query()
-        filter_name = Filter("name", "is", name)
-        filter_loc = Filter("location", "is", loc)
-        filter_unit = Filter("unit", "is", "kilowatt hour")
-        q.add(filter_name)
-        q.add(filter_loc)
-        q.add(filter_unit)
-        results = q(ei_db_data)
+        candidate_locations = [loc]
+        candidate_locations.extend(
+            fallback_loc
+            for fallback_loc in fallback_locations or ()
+            if fallback_loc != loc
+        )
+        results = ()
+        resolved_loc = loc
+        for candidate_loc in candidate_locations:
+            results = background_index.by_name_location_unit.get(
+                (name, candidate_loc, "kilowatt hour"),
+                (),
+            )
+            resolved_loc = candidate_loc
+            if results:
+                break
+
         if len(results) == 1:
-            known_inputs[(loc, name, unit)] = list(results).pop()
+            exchange = results[0]
+            known_inputs[(original_loc, original_name, unit)] = exchange
+            known_inputs[(loc, name, unit)] = exchange
+            known_inputs[(resolved_loc, name, unit)] = exchange
+            if resolved_loc != loc:
+                print(
+                    f"Using fallback activity:{name}, {resolved_loc} "
+                    f"for requested geography {loc}"
+                )
         else:
             print("Couldnt find activity:" + name + ", " + loc)
-    network = get_network_activities(eidb_name)
+            missing_inputs.append((loc, name, len(results)))
+
+    network = get_network_activities(eidb_name) if include_network else []
     known_inputs_network = {}
     for act in network:
         loc = act["loc"]
         name = act["name"]
-        q = Query()
-        filter_name = Filter("name", "is", name)
-        filter_loc = Filter("location", "is", loc)
-        q.add(filter_name)
-        q.add(filter_loc)
-        results = q(ei_db_data)
+        results = background_index.by_name_location.get((name, loc), ())
         if len(results) == 1:
-            known_inputs_network[(loc, name)] = list(results).pop()
+            known_inputs_network[(loc, name)] = results[0]
         else:
             print("Couldnt find activity:" + name)
+            missing_inputs.append((loc, name, len(results)))
+
+    if strict and missing_inputs:
+        details = "; ".join(
+            f"{name}, {loc} ({matches} matches)"
+            for loc, name, matches in missing_inputs
+        )
+        raise ValueError(
+            f"Could not uniquely map required activities in {eidb_name!r}: "
+            + details
+        )
+
     return known_inputs, known_inputs_network
 
 
 def get_network_activities(eidb_name):
+    """Return fixed electricity-network exchanges for a background version.
+
+    Args:
+        eidb_name: Background database name. Version markers in the name select
+            the locations used by newer ecoinvent releases.
+
+    Returns:
+        List of dictionaries containing activity name, location, and exchange
+        amount per kilowatt hour of supplied electricity.
+    """
     activities = [
         "market for distribution network, electricity, low voltage",
         "market for transmission network, electricity, medium voltage",
@@ -484,7 +423,81 @@ def get_network_activities(eidb_name):
     return network_act
 
 
-def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_name):
+def get_country_network_activities(eidb_name, country):
+    """Return the fixed network exchanges included for one consumer country."""
+    specific_network = {
+        "land": (
+            "market for transmission network, electricity, high voltage "
+            "direct current land cable"
+        ),
+        "subsea": (
+            "market for transmission network, electricity, high voltage "
+            "direct current subsea cable"
+        ),
+        "construction": (
+            "transmission network construction, electricity, high voltage"
+        ),
+    }
+    land_cable_countries = {
+        "AT",
+        "BE",
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "IT",
+        "LT",
+        "LV",
+        "ME",
+        "MT",
+        "NO",
+        "SE",
+        "TR",
+        "UK",
+    }
+    subsea_cable_countries = {
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "IT",
+        "LT",
+        "ME",
+        "MT",
+        "NO",
+        "PL",
+        "UK",
+    }
+    selected = []
+    for exchange in get_network_activities(eidb_name):
+        name = exchange["name"]
+        if name not in specific_network.values():
+            selected.append(exchange)
+        elif name == specific_network["land"] and country in land_cable_countries:
+            selected.append(exchange)
+        elif name == specific_network["subsea"] and country in subsea_cable_countries:
+            selected.append(exchange)
+        elif name == specific_network["construction"] and country == "CH":
+            selected.append(exchange)
+    return selected
+
+
+def create_activity_dict(
+    dataframe_filt,
+    known_inputs,
+    known_inputs_network,
+    db_name,
+    eidb_name=None,
+    year=None,
+    consumption_profile=None,
+    inventory_resolution=None,
+):
     """
     Creates a dictionary of activities for the BW database based on the filtered dataframe and known inputs.
 
@@ -493,19 +506,37 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
         known_inputs (dict): A dictionary mapping known inputs to ecoinvent database entries.
         known_inputs_network (dict): A dictionary mapping known network inputs to ecoinvent database entries.
         db_name (str): The name of the BW database.
+        eidb_name (str): Background database name used to select version-specific
+            network activities. Defaults to ``db_name`` for backwards compatibility.
+        year (int, optional): Model year stored on each activity and included in
+            its name. If a time-indexed column already contains the year, the
+            name is left unchanged to avoid repeating it.
+        consumption_profile (str, optional): Temporal weighting represented by
+            the foreground inventory, stored as activity metadata.
+        inventory_resolution (str, optional): ``"annual"`` or ``"monthly"``.
+            When omitted, time-indexed columns are treated as monthly and
+            country-only columns as annual for compatibility.
 
     Returns:
         dict: A dictionary containing activities to be written to the BW2 database.
     """
     activities = {}
+    activity_year = int(year) if year is not None else None
+    resolution = (
+        validate_inventory_resolution(inventory_resolution)
+        if inventory_resolution is not None
+        else ("monthly" if dataframe_filt.columns.nlevels > 1 else "annual")
+    )
     for i, col in enumerate(dataframe_filt.columns):
         if dataframe_filt.columns.nlevels > 1:
             time, country = col
-            activity = f"{time} Electricity mix"
-            name = f"{activity} in {country}"
+            period = _format_inventory_period(time, resolution)
         else:
             country = col
-            name = f"Electricity mix in {country}"
+            period = str(activity_year) if activity_year is not None else None
+        name = FOREGROUND_ACTIVITY_NAME
+        if period is not None:
+            name = f"{name}, {period}"
         code = f"electricity {i}"
         bd_version = bd.__version__
         if not isinstance(bd_version, str):
@@ -519,20 +550,30 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
             prod_exchange_type = bd.labels.production_edge_default
         act = {
             "name": name,
-            "unit": "kWh",
+            "unit": FOREGROUND_UNIT,
             "code": code,
             "location": str(country),
-            "reference product": "Electricity mix",
+            "reference product": FOREGROUND_REFERENCE_PRODUCT,
             "type": act_type,
+            "inventory_resolution": resolution,
+            "comment": _inventory_comment(
+                resolution,
+                period,
+                consumption_profile,
+            ),
             "exchanges": [],
         }
+        if activity_year is not None:
+            act["year"] = activity_year
+        if consumption_profile is not None:
+            act["consumption_profile"] = str(consumption_profile)
         # Add the production exchange
         act["exchanges"].append(
             {
                 "input": (db_name, code),
                 "name": name,
                 "location": str(country),
-                "unit": "kWh",
+                "unit": FOREGROUND_UNIT,
                 "amount": 1,
                 "type": prod_exchange_type,
             }
@@ -548,96 +589,31 @@ def create_activity_dict(dataframe_filt, known_inputs, known_inputs_network, db_
                         "type": "technosphere",
                     }
                     act["exchanges"].append(new_exchange)
-        network = get_network_activities(db_name)
-        specific_network = [
-            "market for transmission network, electricity, high voltage direct current land cable",
-            "market for transmission network, electricity, high voltage direct current subsea cable",
-            "transmission network construction, electricity, high voltage",
-        ]
-        land_cable = [
-            "FR",
-            "IT",
-            "GR",
-            "DK",
-            "AT",
-            "BE",
-            "EE",
-            "ES",
-            "FI",
-            "HR",
-            "IT",
-            "LT",
-            "LV",
-            "ME",
-            "MT",
-            "NO",
-            "SE",
-            "TR",
-            "UK",
-        ]
-        subsea_cable = [
-            "FR",
-            "IT",
-            "GR",
-            "DK",
-            "EE",
-            "ES",
-            "FI",
-            "HR",
-            "IT",
-            "LT",
-            "ME",
-            "MT",
-            "NO",
-            "PL",
-            "UK",
-        ]
-        for exch_net in network:
-            if exch_net["name"] not in specific_network:
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
+        for exch_net in get_country_network_activities(eidb_name or db_name, country):
+            exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
+            if exchange:
+                act["exchanges"].append(
+                    {
                         "input": exchange,
                         "amount": float(exch_net["val"]),
                         "type": "technosphere",
                     }
-                    act["exchanges"].append(new_exchange)
-            if (
-                country in land_cable and exch_net["name"] == specific_network[0]
-            ):  # writing the land cable
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
-            if (
-                country in subsea_cable and exch_net["name"] == specific_network[1]
-            ):  # writing the subsea cable
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
-            if country == "CH" and exch_net["name"] == specific_network[2]:
-                exchange = known_inputs_network.get((exch_net["loc"], exch_net["name"]))
-                if exchange:
-                    new_exchange = {
-                        "input": exchange,
-                        "amount": float(exch_net["val"]),
-                        "type": "technosphere",
-                    }
-                    act["exchanges"].append(new_exchange)
+                )
         activities[(db_name, code)] = act
     return activities
 
 
-def create_database(dataframe_filt, project_name, db_name, eidb_name, network="True"):
+def create_database(
+    dataframe_filt,
+    project_name,
+    db_name,
+    eidb_name,
+    network=True,
+    strict=False,
+    year=None,
+    consumption_profile=None,
+    inventory_resolution=None,
+):
     """
     Creates an "ecoinvent-like" BW database based on a previously filtered dataframe.
 
@@ -645,19 +621,66 @@ def create_database(dataframe_filt, project_name, db_name, eidb_name, network="T
         dataframe_filt (pd.DataFrame): Scaled and filtered dataframe.
         project_name (str): BW project name to which the database will be saved.
         db_name (str): Name of the BW database to be created.
-        eidb_name (str): Name of the ecoinvent database. Must be the same as in the BW project.
-        network (bool): If True, network activities will be considered.
+        eidb_name (str): Name of the ecoinvent or premise background database.
+            Must be the same as in the BW project.
+        network (bool): If True, network activities will be considered. The legacy
+            strings ``"True"`` and ``"False"`` are also accepted.
+        strict (bool): Raise before writing if any required background activity
+            cannot be matched uniquely.
+        year (int, optional): Model year included in foreground activity names
+            and stored as activity metadata.
+        consumption_profile (str, optional): Temporal weighting stored as
+            foreground activity metadata.
+        inventory_resolution (str, optional): Temporal resolution stored in
+            activity names, metadata, and comments.
 
     Returns:
         None
     """
+    include_network = network is True or (
+        isinstance(network, str) and network.lower() == "true"
+    )
+    bd.projects.set_current(project_name)
+    known_inputs, known_inputs_network = map_known_inputs(
+        eidb_name,
+        dataframe_filt,
+        strict=strict,
+        include_network=include_network,
+    )
+    activities = create_activity_dict(
+        dataframe_filt,
+        known_inputs,
+        known_inputs_network,
+        db_name,
+        eidb_name=eidb_name,
+        year=year,
+        consumption_profile=consumption_profile,
+        inventory_resolution=inventory_resolution,
+    )
     elec_db = setup_database(project_name, db_name)
-    if network == "True":
-        known_inputs, known_inputs_network = map_known_inputs(eidb_name, dataframe_filt)
-        activities = create_activity_dict(
-            dataframe_filt, known_inputs, known_inputs_network, db_name
-        )
-    else:
-        known_inputs, _ = map_known_inputs(eidb_name, dataframe_filt)
-        activities = create_activity_dict(dataframe_filt, known_inputs, _, db_name)
     elec_db.write(activities)
+
+
+def _format_inventory_period(time, inventory_resolution):
+    """Format a table-column timestamp for an activity name."""
+    timestamp = pd.Timestamp(time)
+    if inventory_resolution == "monthly":
+        return timestamp.strftime("%Y-%m")
+    return str(timestamp.year)
+
+
+def _inventory_comment(
+    inventory_resolution,
+    period,
+    consumption_profile,
+):
+    """Build ActivityBrowser documentation for a foreground inventory."""
+    parts = [
+        "SHRECC electricity consumption mix.",
+        f"Inventory resolution: {inventory_resolution}.",
+    ]
+    if period is not None:
+        parts.append(f"Inventory period: {period}.")
+    if consumption_profile is not None:
+        parts.append(f"Consumption profile: {consumption_profile}.")
+    return " ".join(parts)

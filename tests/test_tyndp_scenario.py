@@ -1,0 +1,532 @@
+import zipfile
+
+import numpy as np
+import pandas as pd
+import pytest
+import xarray as xr
+
+from shrecc import tyndp
+
+
+def test_load_technology_concordance_accepts_csv(tmp_path):
+    concordance_file = tmp_path / "technology_mapping.csv"
+    pd.DataFrame(
+        {
+            "wind": [1, 3, 0],
+            "unused": [0, 0, 0],
+        },
+        index=pd.Index(["wind small", "wind large", "network"], name="activity"),
+    ).to_csv(concordance_file)
+
+    result = tyndp.load_technology_concordance(
+        concordance_file,
+        sheet_name="ignored for csv",
+    )
+
+    expected = pd.DataFrame(
+        {"wind": [0.25, 0.75]},
+        index=pd.Index(["wind small", "wind large"], name="activity"),
+    )
+    expected.columns.name = "Category"
+
+    pd.testing.assert_frame_equal(result, expected)
+
+
+def test_load_tyndp_country_mapping_accepts_csv_directory(tmp_path):
+    mapping_dir = tmp_path / "tyndp"
+    mapping_dir.mkdir()
+    countries_file = mapping_dir / "tyndp_countries.csv"
+    connections_file = mapping_dir / "tyndp_connections.csv"
+
+    pd.DataFrame(
+        {
+            "Country code": ["ES", "PT"],
+            "Country name": ["Spain", "Portugal"],
+        },
+        index=pd.Index(["ES00", "PT00"], name="Bidding Zone"),
+    ).to_csv(countries_file)
+    pd.DataFrame(
+        {
+            "BZ from": ["ES00"],
+            "BZ to": ["PT00"],
+            "Country from": ["ES"],
+            "Country to": ["PT"],
+            "Country line": ["ES-PT"],
+        },
+        index=pd.Index(["ES00-PT00"], name="BZ line"),
+    ).to_csv(connections_file)
+
+    countries, connections = tyndp.load_tyndp_country_mapping(mapping_dir)
+
+    assert countries.loc["ES00", "Country code"] == "ES"
+    assert connections.loc["ES00-PT00", "Country to"] == "PT"
+
+
+def test_aggregate_tyndp_consumption_uses_measured_country_demand():
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("Demand [MW]\n(losses included)", "EE00", "demand-1"),
+            ("Demand [MW]\n(losses included)", "EE00RETE", "demand-2"),
+            ("Wind Onshore [MW]", "EE00", "wind"),
+        ],
+        names=["Category", "Country", "Code"],
+    )
+    production = pd.DataFrame([[70.0, 5.0, 20.0]], columns=columns)
+    country_codes = pd.Series({"EE00": "EE"})
+
+    result = tyndp._aggregate_tyndp_consumption(
+        production,
+        country_codes,
+    )
+
+    pd.testing.assert_frame_equal(
+        result,
+        pd.DataFrame([[75.0]], columns=pd.Index(["EE"], name="Country")),
+    )
+
+
+def test_aggregate_tyndp_trade_does_not_double_count_detail_series():
+    trade = pd.DataFrame(
+        [[10.0, 7.0, 3.0, 2.0]],
+        columns=[
+            "EE00-FI00",
+            "EE00-FI00 Real 1",
+            "FR00-IE00 Real 1",
+            "FR00-IE00 Concept 1",
+        ],
+    )
+    connections = pd.DataFrame(
+        {
+            "Country from": ["EE", "FR"],
+            "Country to": ["FI", "IE"],
+        },
+        index=["EE00-FI00", "FR00-IE00"],
+    )
+
+    result = tyndp._aggregate_tyndp_trade(trade, connections)
+
+    assert result.loc[0, ("FI", "EE")] == 10.0
+    assert result.loc[0, ("IE", "FR")] == 5.0
+
+
+def test_tyndp_scenario_paths_normalizes_inputs(tmp_path):
+    paths = tyndp.tyndp_scenario_paths(
+        tmp_path,
+        scenario="de",
+        year="2050",
+        climate_year="2009",
+    )
+
+    assert paths["production_pickle"] == tmp_path / "DE2050_CY2009_prod.pkl"
+    assert paths["trade_pickle"] == tmp_path / "DE2050_CY2009_trade.pkl"
+    assert paths["zip"] == tmp_path / "DE2050CY2009.zip"
+    assert paths["workbook"] == (
+        tmp_path / "MMStandardOutputFile_DE2050_Plexos_CY2009_v11_SoS.xlsb"
+    )
+    assert paths["url"].endswith("/DE2050CY2009.zip")
+
+
+def test_tyndp_scenario_paths_supports_de_2035_snapshot(tmp_path):
+    paths = tyndp.tyndp_scenario_paths(tmp_path, "DE", 2035, 2009)
+
+    assert paths["production_pickle"] == tmp_path / "DE2035_CY2009_prod.pkl"
+    assert paths["trade_pickle"] == tmp_path / "DE2035_CY2009_trade.pkl"
+    assert paths["zip"] == tmp_path / "DE2035CY2009.zip"
+    assert paths["workbook"] == (
+        tmp_path / "MMStandardOutputFile_DE2035_Plexos_CY2009_v11_SoS.xlsb"
+    )
+    assert paths["url"] == (
+        "https://2024-data.entsos-tyndp-scenarios.eu/files/scenarios-outputs/"
+        "DE2035CY2009.zip"
+    )
+
+
+@pytest.mark.parametrize(
+    "scenario, year, climate_year",
+    [
+        ("DE", 2035, 2009),
+        ("GA", 2035, 2009),
+        ("DE", 2040, 1995),
+        ("GA", 2050, 2008),
+        ("NT", 2030, 2009),
+        ("NT", 2040, 2009),
+    ],
+)
+def test_validate_tyndp_scenario_accepts_known_values(
+    scenario,
+    year,
+    climate_year,
+):
+    assert tyndp.validate_tyndp_scenario(scenario, year, climate_year) == (
+        scenario,
+        year,
+        climate_year,
+    )
+
+
+@pytest.mark.parametrize(
+    "scenario, year, climate_year",
+    [
+        ("bad", 2050, 2009),
+        ("DE", 2060, 2009),
+        ("DE", 2030, 2009),
+        ("NT", 2035, 2009),
+        ("NT", 2050, 2009),
+        ("DE", 2050, 2010),
+    ],
+)
+def test_validate_tyndp_scenario_rejects_unknown_values(
+    scenario,
+    year,
+    climate_year,
+):
+    with pytest.raises(ValueError):
+        tyndp.validate_tyndp_scenario(scenario, year, climate_year)
+
+
+def test_ensure_tyndp_workbook_extracts_existing_zip(tmp_path):
+    paths = tyndp.tyndp_scenario_paths(tmp_path, "DE", 2050, 2009)
+    with zipfile.ZipFile(paths["zip"], "w") as archive:
+        archive.writestr(f"nested/{paths['workbook'].name}", b"xlsb-bytes")
+
+    workbook = tyndp.ensure_tyndp_workbook(
+        "DE",
+        2050,
+        2009,
+        tmp_path,
+        download=False,
+    )
+
+    assert workbook == paths["workbook"]
+    assert workbook.read_bytes() == b"xlsb-bytes"
+
+
+def test_ensure_tyndp_workbook_raises_when_download_disabled(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        tyndp.ensure_tyndp_workbook(
+            "DE",
+            2050,
+            2009,
+            tmp_path,
+            download=False,
+        )
+
+
+def test_build_z_gross_from_tyndp_scenario_uses_pickles_first(
+    tmp_path,
+    monkeypatch,
+):
+    paths = tyndp.tyndp_scenario_paths(tmp_path, "DE", 2050, 2009)
+    paths["production_pickle"].write_bytes(b"prod")
+    paths["trade_pickle"].write_bytes(b"trade")
+    calls = []
+    expected = pd.DataFrame({"value": [1]})
+
+    def fake_from_pickles(**kwargs):
+        calls.append(("pickles", kwargs))
+        return expected
+
+    def fake_from_excel(**kwargs):
+        calls.append(("excel", kwargs))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(tyndp, "build_z_gross_from_tyndp_pickles", fake_from_pickles)
+    monkeypatch.setattr(tyndp, "build_z_gross_from_tyndp_excel", fake_from_excel)
+
+    result = tyndp.build_z_gross_from_tyndp_scenario(
+        "DE",
+        2050,
+        2009,
+        tmp_path,
+        technology_mapping="tech.xlsx",
+        country_mapping="country.xlsx",
+    )
+
+    assert result is expected
+    assert [name for name, _ in calls] == ["pickles"]
+    assert calls[0][1]["production_pickle"] == paths["production_pickle"]
+    assert calls[0][1]["trade_pickle"] == paths["trade_pickle"]
+
+
+def test_build_z_gross_from_tyndp_scenario_uses_excel_and_saves_pickles(
+    tmp_path,
+    monkeypatch,
+):
+    paths = tyndp.tyndp_scenario_paths(tmp_path, "DE", 2050, 2009)
+    paths["workbook"].write_bytes(b"xlsb")
+    calls = []
+    expected = pd.DataFrame({"value": [1]})
+
+    def fake_from_excel(**kwargs):
+        calls.append(kwargs)
+        return expected
+
+    monkeypatch.setattr(tyndp, "build_z_gross_from_tyndp_excel", fake_from_excel)
+
+    result = tyndp.build_z_gross_from_tyndp_scenario(
+        "DE",
+        2050,
+        2009,
+        tmp_path,
+        technology_mapping="tech.xlsx",
+        country_mapping="country.xlsx",
+        download=False,
+    )
+
+    assert result is expected
+    assert calls[0]["excel_file"] == paths["workbook"]
+    assert calls[0]["production_pickle"] == paths["production_pickle"]
+    assert calls[0]["trade_pickle"] == paths["trade_pickle"]
+
+
+def _tiny_z_gross_with_zero_consumption_hour():
+    times = pd.to_datetime(
+        [
+            "2040-01-01 00:00",
+            "2040-01-02 00:00",
+            "2040-01-03 00:00",
+            "2040-02-01 00:00",
+        ]
+    )
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("production mix", "AL", "AL", "Solar"),
+            ("production mix", "AL", "AL", "Wind"),
+            ("production mix", "ME", "ME", "Solar"),
+            ("production mix", "ME", "ME", "Wind"),
+            ("trade", "AL", "ME", "electricity"),
+            ("trade", "ME", "AL", "electricity"),
+        ],
+        names=["type", "country from", "country to", "source"],
+    )
+    return pd.DataFrame(
+        [
+            [2.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 6.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        ],
+        index=times,
+        columns=columns,
+    )
+
+
+def _tiny_z_gross_with_trade():
+    times = pd.to_datetime(["2040-01-01 00:00"])
+    columns = pd.MultiIndex.from_tuples(
+        [
+            ("production mix", "A", "A", "Solar"),
+            ("production mix", "A", "A", "Wind"),
+            ("production mix", "B", "B", "Solar"),
+            ("production mix", "B", "B", "Wind"),
+            ("trade", "A", "B", "electricity"),
+            ("trade", "B", "A", "electricity"),
+        ],
+        names=["type", "country from", "country to", "source"],
+    )
+    return pd.DataFrame(
+        [[80.0, 20.0, 0.0, 60.0, 40.0, 0.0]],
+        index=times,
+        columns=columns,
+    )
+
+
+def test_consumption_results_retain_volumes_and_normalized_mix():
+    results = tyndp.consumption_results_from_z_gross(_tiny_z_gross_with_trade())
+
+    assert set(results.data_vars) == {
+        "production_volume",
+        "trade_volume",
+        "consumption_volume",
+        "consumption_mix_volume",
+        "consumption_mix",
+    }
+    assert results.attrs["solver"] == "country_trade_block"
+    assert results["consumption_volume"].attrs["unit"] == "MWh"
+
+    np.testing.assert_allclose(
+        results["consumption_volume"].sel(consumer_country=["A", "B"]),
+        [[60.0, 100.0]],
+    )
+    np.testing.assert_allclose(
+        results["consumption_mix_volume"].sel(
+            consumer_country="B",
+            source_country="A",
+            technology=["Solar", "Wind"],
+        ),
+        [[32.0, 8.0]],
+    )
+    np.testing.assert_allclose(
+        results["consumption_mix_volume"].sel(
+            consumer_country="B",
+            source_country="B",
+            technology=["Solar", "Wind"],
+        ),
+        [[0.0, 60.0]],
+    )
+    xr.testing.assert_allclose(
+        results["consumption_mix_volume"].sum(
+            ["source_country", "technology"]
+        ),
+        results["consumption_volume"],
+    )
+    np.testing.assert_allclose(
+        results["consumption_mix"].sum(["source_country", "technology"]),
+        1,
+    )
+
+
+def test_consumption_results_prefer_measured_tyndp_demand():
+    Z_gross = _tiny_z_gross_with_trade()
+    demand_columns = pd.MultiIndex.from_tuples(
+        [
+            ("consumption", "A", "A", tyndp.TYNDP_DEMAND_CATEGORY),
+            ("consumption", "B", "B", tyndp.TYNDP_DEMAND_CATEGORY),
+        ],
+        names=Z_gross.columns.names,
+    )
+    demand = pd.DataFrame([[55.0, 90.0]], index=Z_gross.index, columns=demand_columns)
+    Z_gross = pd.concat([Z_gross, demand], axis=1)
+
+    results = tyndp.consumption_results_from_z_gross(Z_gross)
+
+    np.testing.assert_allclose(
+        results["consumption_volume"].sel(consumer_country=["A", "B"]),
+        [[55.0, 90.0]],
+    )
+    assert results.attrs["consumption_volume_source"] == (
+        tyndp.TYNDP_DEMAND_CATEGORY
+    )
+    xr.testing.assert_allclose(
+        results["consumption_mix_volume"].sum(
+            ["source_country", "technology"]
+        ),
+        results["consumption_volume"],
+    )
+
+
+def test_reduced_solver_matches_legacy_full_matrix_result():
+    Z_gross = _tiny_z_gross_with_trade()
+
+    reduced = tyndp.consumption_mix_from_z_gross(Z_gross)
+    legacy = tyndp._legacy_consumption_mix_from_z_gross(Z_gross)
+
+    xr.testing.assert_allclose(reduced, legacy)
+
+
+def test_consumption_mix_zero_consumption_month_hour_average_fallback():
+    Z_gross = _tiny_z_gross_with_zero_consumption_hour()
+
+    consumption_mix, debug = tyndp.consumption_mix_from_z_gross(
+        Z_gross,
+        zero_consumption="month_hour_average",
+        return_debug=True,
+    )
+
+    imputed = consumption_mix.sel(
+        time="2040-01-03 00:00",
+        consumer_country="AL",
+        source_country="AL",
+    )
+    np.testing.assert_allclose(imputed.sel(technology="Solar"), 0.25)
+    np.testing.assert_allclose(imputed.sel(technology="Wind"), 0.75)
+    np.testing.assert_allclose(
+        consumption_mix.sel(
+            time="2040-01-03 00:00",
+            consumer_country="AL",
+        ).sum(),
+        1.0,
+    )
+
+    assert debug["zero_consumption_mask"].sum() == 1
+    assert debug["zero_consumption_imputed"].iloc[0]["fallback"] == "month_hour"
+
+
+def test_imputed_consumption_mix_does_not_create_volume():
+    results = tyndp.consumption_results_from_z_gross(
+        _tiny_z_gross_with_zero_consumption_hour(),
+        zero_consumption="month_hour_average",
+    )
+
+    zero_hour = results.sel(
+        time="2040-01-03 00:00",
+        consumer_country="AL",
+    )
+    np.testing.assert_allclose(zero_hour["consumption_mix"].sum(), 1)
+    np.testing.assert_allclose(zero_hour["consumption_volume"], 0)
+    np.testing.assert_allclose(zero_hour["consumption_mix_volume"].sum(), 0)
+
+
+def test_consumption_mix_zero_consumption_still_raises_by_default():
+    Z_gross = _tiny_z_gross_with_zero_consumption_hour()
+
+    with pytest.raises(ValueError, match="zero total consumption"):
+        tyndp.consumption_mix_from_z_gross(Z_gross)
+
+
+def test_read_excel_dataframe_falls_back_when_calamine_missing(tmp_path, monkeypatch):
+    """_read_excel_dataframe retries without engine when calamine is not installed."""
+    xlsx = tmp_path / "data.xlsx"
+    pd.DataFrame({"a": [1, 2]}).to_excel(xlsx, index=False)
+
+    calls = []
+
+    original_read_excel = pd.read_excel
+
+    def mock_read_excel(filename, **kwargs):
+        calls.append(kwargs.get("engine"))
+        if kwargs.get("engine") == "calamine":
+            raise ImportError("Missing optional dependency 'python-calamine'.")
+        return original_read_excel(filename, **kwargs)
+
+    monkeypatch.setattr(pd, "read_excel", mock_read_excel)
+
+    result = tyndp._read_excel_dataframe(xlsx, engine="calamine")
+
+    assert calls == ["calamine", None]
+    assert list(result.columns) == ["a"]
+
+
+def test_read_excel_dataframe_reraises_import_error_without_engine(tmp_path, monkeypatch):
+    """_read_excel_dataframe does not swallow ImportErrors unrelated to engine."""
+    xlsx = tmp_path / "data.xlsx"
+    pd.DataFrame({"a": [1]}).to_excel(xlsx, index=False)
+
+    def mock_read_excel(filename, **kwargs):
+        raise ImportError("some other import problem")
+
+    monkeypatch.setattr(pd, "read_excel", mock_read_excel)
+
+    with pytest.raises(ImportError, match="some other import problem"):
+        tyndp._read_excel_dataframe(xlsx)
+
+
+def test_extract_tyndp_workbook_from_zip_finds_xlsx(tmp_path):
+    """_extract_tyndp_workbook_from_zip falls back to .xlsx when name is not matched."""
+    zip_path = tmp_path / "NT2030CY2009.zip"
+    workbook = tmp_path / "MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx"
+
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr(
+            "MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx",
+            b"xlsx-bytes",
+        )
+        # macOS metadata entry that must be ignored
+        archive.writestr(
+            "__MACOSX/._MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx",
+            b"meta",
+        )
+
+    tyndp._extract_tyndp_workbook_from_zip(zip_path, workbook)
+
+    assert workbook.read_bytes() == b"xlsx-bytes"
+
+
+def test_parse_tyndp_datetime_index_handles_uppercase_months():
+    """NT workbooks use all-caps month abbreviations; parsing must normalise them."""
+    index = pd.Index(["01JAN00:00", "15SEP12:00", "31DEC23:00"])
+    result = tyndp._parse_tyndp_datetime_index(index, model_year=2030)
+    assert isinstance(result, pd.DatetimeIndex)
+    assert result[0] == pd.Timestamp("2030-01-01 00:00")
+    assert result[1] == pd.Timestamp("2030-09-15 12:00")
+    assert result[2] == pd.Timestamp("2030-12-31 23:00")

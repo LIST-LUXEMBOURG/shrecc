@@ -1,0 +1,44 @@
+def test_legacy_module_names_reexport_canonical_functions():
+    import shrecc
+    from shrecc import _legacy_tyndp as legacy_tyndp
+    from shrecc import _legacy_treatment as legacy_treatment
+    from shrecc import (
+        activity_mapping,
+        database,
+        download,
+        energy_charts,
+        mapping,
+        premise_mapping,
+        result_store,
+        treatment,
+        treatment_fiona,
+        tyndp,
+    )
+    from shrecc.pipeline import NewDatabase
+
+    assert download.get_data is energy_charts.get_data
+    assert download.data_processing is energy_charts.data_processing
+    assert treatment.data_processing is energy_charts.data_processing
+    assert (
+        energy_charts.get_package_user_data_dir
+        is result_store.get_package_user_data_dir
+    )
+    assert treatment.calculate_results is legacy_treatment.calculate_results
+    assert (
+        activity_mapping.map_consumption_mix_to_ecoinvent_activities
+        is mapping.map_consumption_mix_to_ecoinvent_activities
+    )
+    assert database.load_mapping_data is mapping.load_ecoinvent_mapping
+    assert (
+        tyndp._legacy_consumption_mix_from_z_gross
+        is legacy_tyndp._legacy_consumption_mix_from_z_gross
+    )
+    assert (
+        treatment_fiona.build_z_gross_from_tyndp_scenario
+        is tyndp.build_z_gross_from_tyndp_scenario
+    )
+    assert (
+        treatment_fiona.premise_activity_mix_to_database_table
+        is premise_mapping.premise_activity_mix_to_database_table
+    )
+    assert shrecc.NewDatabase is NewDatabase

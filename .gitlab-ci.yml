@@ -60,23 +60,25 @@ publish_pypi:
     - build_pip_pkg
   rules:
     - if: ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop")
+      when: manual
 
-
-
-# Hidden template: reuse across all Python versions
+# Hidden template: reuse across all Python versions.
+# Uses the project optional-extra "testing" (uv --extra) rather than a
+# dependency-group, matching [project.optional-dependencies].testing.
 .pytest_template: &pytest_template
   stage: test
-  image: ghcr.io/astral-sh/uv:bookworm-slim
-  before_script:
-    # Ensure the version is set, then install that interpreter
+  image: ghcr.io/astral-sh/uv:bookworm
+  script:
     - test -n "$PYTHON_VERSION" || { echo "PYTHON_VERSION not set"; exit 2; }
     - uv venv --python "$PYTHON_VERSION"
-    # Install deps (incl. dev) from pyproject/lockfile
-    - uv pip install pytest pytest-cov pypardiso
-  script:
-    # Run pytest using the selected Python version via uv
-    - uv run --python "$PYTHON_VERSION" pytest 
-    #-v --maxfail=1 --disable-warnings
+    - uv sync --python "$PYTHON_VERSION" --extra testing
+    - uv run --python "$PYTHON_VERSION" --extra testing pytest --junit-xml=junit.xml --cov-report xml:coverage.xml -v --maxfail=1 --disable-warnings
+  artifacts:
+    when: always
+    paths:
+      - coverage.xml
+    reports:
+      junit: junit.xml
   cache:
     key: "uv-${PYTHON_VERSION}"
     paths:

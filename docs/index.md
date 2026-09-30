@@ -13,7 +13,9 @@ maxdepth: 1
 ---
 self
 content/data
-content/notebooks/notebooks
+content/notebooks/index
+architecture
+refactoring
 content/api/index
 content/license
 content/changelog
