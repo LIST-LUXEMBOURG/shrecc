@@ -1,9 +1,11 @@
 SHRECC CHANGELOG
 ================
 
-## 0.1.2.dev1 - 2026-09-08
+## 0.1.2 - 2026-09-16
 
-+ fix #49 - correct tyndp download urls
+- Fix TYNDP download URLs (#49).
+- Fix parsing of the NT scenario Excel sheet (#52).
+- Update contributor list.
 
 ## 0.1.1 - 2026-07-30
 
