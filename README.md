@@ -134,3 +134,8 @@ Licensed under the MIT License.
 
 * Sabina Bednářová (<sabina.bednarova@list.lu>)
 * Thomas Gibon (<thomas.gibon@list.lu>)
+
+### Contributors
+
++ Isabela PICHARDO VELAZQUEZ <isabela.pichardo@list.lu>
++ Caipeng LIANG <caipeng.liang@list.lu>
