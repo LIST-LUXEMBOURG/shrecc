@@ -1,5 +1,8 @@
 SHRECC CHANGELOG
 ================
+## 0.1.3 - 2026-09-30
+
+- release of current develop to main
 
 ## 0.1.2 - 2026-09-16
 
