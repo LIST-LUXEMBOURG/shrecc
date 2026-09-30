@@ -60,8 +60,7 @@ publish_pypi:
     - build_pip_pkg
   rules:
     - if: ($CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop")
-
-
+      when: manual
 
 # Hidden template: reuse across all Python versions.
 # Uses the project optional-extra "testing" (uv --extra) rather than a
