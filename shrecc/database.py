@@ -99,7 +99,7 @@ def build_background_activity_index(eidb_name):
 
 def filt_cutoff(
     countries,
-    times=[],
+    times=None,
     general_range=0,
     refined_range=0,
     freq=0,
@@ -111,7 +111,6 @@ def filt_cutoff(
     Filters data based on selected countries and times (either one-off, a range, or periodical range).
 
     Args:
-        year (int): Selected year of the downloaded data.
         countries (list of str): Countries selected by the user for their database.
             E.g. countries=['FR', 'DE'].
         times (list of str): Selecting one specific time, e.g. times = ['2023-06-16 8:00:00', '2023-06-16 22:00:00'].
@@ -131,6 +130,8 @@ def filt_cutoff(
     Returns:
         pd.DataFrame: The filtered dataframe.
     """
+    times = [] if times is None else list(times)
+
     if path_to_data:
         print(f"Using mapping root: {path_to_data}")
         path_to_data = Path(path_to_data)
