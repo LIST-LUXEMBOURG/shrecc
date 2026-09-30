@@ -1,5 +1,10 @@
 SHRECC CHANGELOG
 ================
+
+## 0.2.0.dev1 
+
+- upcoming release
+
 ## 0.1.3 - 2026-09-30
 
 - release of current develop to main
