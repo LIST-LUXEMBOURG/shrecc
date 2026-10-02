@@ -658,7 +658,7 @@ def create_database(
         inventory_resolution=inventory_resolution,
     )
     elec_db = setup_database(project_name, db_name)
-    elec_db.write(activities)
+    elec_db.write(activities, signal=True)
 
 
 def _format_inventory_period(time, inventory_resolution):

@@ -2007,7 +2007,7 @@ def test_create_database_with_network_true(
         consumption_profile="national_demand",
         inventory_resolution=None,
     )
-    mock_db.write.assert_called_once_with(activities)
+    mock_db.write.assert_called_once_with(activities, signal=True)
 
 
 @patch("shrecc.database.bd.projects.set_current")
@@ -2053,7 +2053,7 @@ def test_create_database_with_network_false(
         consumption_profile=None,
         inventory_resolution=None,
     )
-    mock_db.write.assert_called_once_with(activities)
+    mock_db.write.assert_called_once_with(activities, signal=True)
 
 
 @patch("shrecc.database.bd.projects.set_current")
@@ -2082,7 +2082,7 @@ def test_create_database_empty_activities(
         network="True",
     )
 
-    mock_db.write.assert_called_once_with({})
+    mock_db.write.assert_called_once_with({}, signal=True)
 
 
 @patch("shrecc.database.bd.projects.set_current")

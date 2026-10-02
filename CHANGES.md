@@ -3,7 +3,7 @@ SHRECC CHANGELOG
 
 ## 0.2.0.dev1 
 
-- upcoming release
+- update signal sending on db write (AB compat on the way)
 
 ## 0.1.3 - 2026-09-30
 

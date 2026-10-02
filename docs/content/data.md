@@ -54,6 +54,11 @@ Prospective runs cache downloaded TYNDP archives, extracted workbooks, and parse
 production and trade tables. These files are local data and are not package
 resources.
 
+Energy Charts data for an ongoing year are snapshots. If a requested time
+selection is later than the cached snapshot, `NewDatabase.create()` refreshes
+the year's source data and rebuilds its canonical cache when `download=True`.
+With `download=False`, it reports that the requested times are not cached.
+
 Canonical solved results are written as compressed time chunks with a manifest.
 Only chunks intersecting the requested date or timestamp selection are loaded.
 The resulting xarray Dataset can contain:
