@@ -1,7 +1,7 @@
 SHRECC CHANGELOG
 ================
 
-## 0.2.0.dev1 
+## 0.2.0 
 
 - update signal sending on db write (AB compat on the way)
 
