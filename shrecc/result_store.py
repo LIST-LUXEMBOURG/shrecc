@@ -17,6 +17,10 @@ MANIFEST_FILENAME = "manifest.json"
 CANONICAL_CACHE_DIRNAME = f"consumption_results_v{CACHE_VERSION}"
 
 
+class CacheTimeSelectionError(ValueError):
+    """Raised when a canonical cache does not cover the requested times."""
+
+
 def save_pickle(obj, filename):
     """Persist a Python object using the repository's legacy pickle format."""
     filename = Path(filename)
@@ -173,7 +177,9 @@ def iter_consumption_result_cache(
             yield results
 
     if not selected_any:
-        raise ValueError("The requested time selection contains no cached results")
+        raise CacheTimeSelectionError(
+            "The requested time selection contains no cached results"
+        )
 
 
 def load_consumption_result_cache(
