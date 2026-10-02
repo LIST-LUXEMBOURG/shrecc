@@ -653,3 +653,50 @@ def test_get_data_resumes_only_missing_required_countries(
     assert {call.kwargs["country"] for call in get_prod_mock.call_args_list} == {"fr"}
     saved = pd.read_pickle(cache)
     assert set(saved) == {"de", "fr"}
+
+
+def test_get_data_force_refresh_ignores_completed_yearly_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    data_dir = tmp_path / "data"
+    cache = data_dir / "2026" / "prod_and_trade_data_2026.pkl"
+    cache.parent.mkdir(parents=True)
+    pd.to_pickle({"de": {"production mix": pd.DataFrame()}}, cache)
+    cache.with_suffix(".download.json").write_text(
+        json.dumps({"countries": {"DE": "success"}}),
+        encoding="utf-8",
+    )
+    fresh_production = pd.DataFrame(
+        {"Solar": [1.0]},
+        index=pd.to_datetime(["2026-08-01 00:00"]),
+    )
+    fresh_load = pd.Series(
+        [2.0],
+        index=fresh_production.index,
+    )
+    fresh_trade = pd.DataFrame(
+        {"FR": [3.0]},
+        index=fresh_production.index,
+    )
+    monkeypatch.setattr("shrecc.energy_charts.ENERGY_CHARTS_COUNTRIES", ("DE",))
+    get_prod_mock = MagicMock(return_value=(fresh_production, fresh_load, ["Solar"]))
+    get_trade_mock = MagicMock(return_value=(fresh_trade, ["FR"]))
+    cleaning_mock = MagicMock(return_value="cleaned")
+    monkeypatch.setattr("shrecc.energy_charts.get_prod", get_prod_mock)
+    monkeypatch.setattr("shrecc.energy_charts.get_trade", get_trade_mock)
+    monkeypatch.setattr("shrecc.energy_charts.cleaning_data", cleaning_mock)
+
+    result = get_data(
+        2026,
+        path_to_data=data_dir,
+        required_countries=["DE"],
+        request_interval=0,
+        force_refresh=True,
+    )
+
+    assert result == "cleaned"
+    get_prod_mock.assert_called_once()
+    get_trade_mock.assert_called_once()
+    saved = pd.read_pickle(cache)
+    assert saved["de"]["production mix"].equals(fresh_production)

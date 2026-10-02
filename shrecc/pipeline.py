@@ -45,6 +45,7 @@ from shrecc.premise_mapping import (
     premise_activity_mix_to_database_table,
 )
 from shrecc.result_store import (
+    CacheTimeSelectionError,
     MANIFEST_FILENAME,
     consumption_result_cache_path,
     get_package_user_data_dir,
@@ -603,11 +604,48 @@ class NewDatabase:
                 include_consumption_mix_volume=False,
             )
         time_range, times = self._selection_for_year(year)
-        results = load_consumption_result_cache(
-            cache_dir,
-            general_range=time_range,
-            times=times,
-        )
+        try:
+            results = load_consumption_result_cache(
+                cache_dir,
+                general_range=time_range,
+                times=times,
+            )
+        except CacheTimeSelectionError as exc:
+            if not self.download:
+                raise CacheTimeSelectionError(
+                    f"The Energy Charts cache for {year} does not cover the "
+                    "requested time selection and download=False prevents it "
+                    "from being refreshed"
+                ) from exc
+            if self.verbose:
+                print(
+                    f"Energy Charts cache for {year} does not cover the "
+                    "requested times; refreshing source data."
+                )
+            data = get_energy_charts_data(
+                year,
+                path_to_data=data_root,
+                required_countries=self.countries,
+                force_refresh=True,
+            )
+            shutil.rmtree(cache_dir)
+            cache_dir = process_energy_charts_data(
+                data,
+                year,
+                path_to_data=data_root,
+                include_consumption_mix_volume=False,
+            )
+            try:
+                results = load_consumption_result_cache(
+                    cache_dir,
+                    general_range=time_range,
+                    times=times,
+                )
+            except CacheTimeSelectionError as refreshed_exc:
+                raise CacheTimeSelectionError(
+                    f"Energy Charts data for {year} still does not cover the "
+                    "requested time selection after refreshing the cache"
+                ) from refreshed_exc
         missing_result_countries = set(self.countries).difference(
             results["consumption_mix"]["consumer_country"].to_index()
         )

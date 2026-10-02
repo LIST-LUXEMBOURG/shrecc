@@ -9,6 +9,7 @@ from shrecc.pipeline import (
     NewDatabase,
     _adapt_profile_to_tyndp_times,
 )
+from shrecc.result_store import CacheTimeSelectionError
 
 
 def _canonical_results(year):
@@ -329,6 +330,101 @@ def test_historical_create_repairs_cache_missing_required_country(
     )
     process.assert_called_once()
     assert "NL" in database.results()["consumer_country"]
+
+
+def test_historical_create_refreshes_cache_missing_requested_times(
+    monkeypatch,
+    tmp_path,
+):
+    cache_dir = tmp_path / "2026" / "consumption_results_v1"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    complete = _canonical_results(2026)
+    load_results = MagicMock(
+        side_effect=[
+            CacheTimeSelectionError(
+                "The requested time selection contains no cached results"
+            ),
+            complete,
+        ]
+    )
+    download = MagicMock(return_value=_energy_charts_data())
+    process = MagicMock(return_value=cache_dir)
+    monkeypatch.setattr(
+        "shrecc.pipeline.load_consumption_result_cache",
+        load_results,
+    )
+    monkeypatch.setattr("shrecc.pipeline.get_energy_charts_data", download)
+    monkeypatch.setattr("shrecc.pipeline.process_energy_charts_data", process)
+    monkeypatch.setattr("shrecc.pipeline.load_ecoinvent_mapping", MagicMock())
+    monkeypatch.setattr(
+        "shrecc.pipeline.map_consumption_mix_to_ecoinvent_activities",
+        MagicMock(
+            return_value=(
+                _activity_mix(2026),
+                xr.zeros_like(complete["consumption_mix"]),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "shrecc.pipeline.activity_mix_to_database_table",
+        MagicMock(return_value=_database_table()),
+    )
+
+    NewDatabase(
+        years=2026,
+        countries=["FR"],
+        project_name="project",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc_FR_2026",
+        times=["2026-06-01 10:00"],
+        data_dir=tmp_path,
+        download=True,
+    ).create()
+
+    download.assert_called_once_with(
+        2026,
+        path_to_data=tmp_path,
+        required_countries=("FR",),
+        force_refresh=True,
+    )
+    process.assert_called_once()
+    assert load_results.call_count == 2
+
+
+def test_historical_create_does_not_refresh_times_when_download_disabled(
+    monkeypatch,
+    tmp_path,
+):
+    cache_dir = tmp_path / "2026" / "consumption_results_v1"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    download = MagicMock()
+    monkeypatch.setattr(
+        "shrecc.pipeline.load_consumption_result_cache",
+        MagicMock(
+            side_effect=CacheTimeSelectionError(
+                "The requested time selection contains no cached results"
+            )
+        ),
+    )
+    monkeypatch.setattr("shrecc.pipeline.get_energy_charts_data", download)
+
+    database = NewDatabase(
+        years=2026,
+        countries=["FR"],
+        project_name="project",
+        bg_db_name="ecoinvent",
+        my_db_name="shrecc_FR_2026",
+        times=["2026-08-01 10:00"],
+        data_dir=tmp_path,
+        download=False,
+    )
+
+    with pytest.raises(CacheTimeSelectionError, match="download=False"):
+        database.create()
+    download.assert_not_called()
 
 
 def test_prospective_create_maps_with_premise_and_write_is_separate(monkeypatch):

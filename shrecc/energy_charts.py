@@ -436,6 +436,7 @@ def get_data(
     request_timeout=API_REQUEST_TIMEOUT,
     request_interval=2,
     required_countries=None,
+    force_refresh=False,
 ):
     """
     Main function for downloading data.
@@ -449,6 +450,9 @@ def get_data(
         request_interval (float): Delay between successful endpoint requests.
         required_countries: Optional country codes which must be available in
             the completed download.
+        force_refresh: Ignore an existing yearly snapshot and download every
+            country again. This is used when a current-year cache predates the
+            requested time selection.
 
     Returns:
         pd.DataFrame: A dataframe containing both production and trade data for all countries in the selected year.
@@ -465,7 +469,7 @@ def get_data(
         str(country).upper() for country in (required_countries or [])
     }
 
-    cache_exists = filename.exists()
+    cache_exists = filename.exists() and not force_refresh
     if cache_exists:
         data = load_from_pickle(filename)
         if not isinstance(data, dict):
@@ -477,7 +481,7 @@ def get_data(
         print("Legacy API data loaded successfully.")
         return cleaning_data(data, files("shrecc.data"))
 
-    status = _load_energy_charts_download_status(status_filename)
+    status = {} if force_refresh else _load_energy_charts_download_status(status_filename)
     for country in data:
         status[str(country).upper()] = "success"
 

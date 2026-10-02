@@ -1,5 +1,10 @@
 SHRECC CHANGELOG
 ================
+
+## 0.2.0.dev1 
+
+- update signal sending on db write (AB compat on the way)
+
 ## 0.1.3 - 2026-09-30
 
 - release of current develop to main
